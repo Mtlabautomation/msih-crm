@@ -1,0 +1,1497 @@
+     1→"use client";
+     2→
+     3→// MSIH CRM V1.0 — Module B: Enquiry Management
+     4→// List + filters + create dialog + detail drawer
+     5→// Developer: Manoj Dore
+     6→
+     7→import { useState, useMemo, useEffect } from "react";
+     8→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+     9→import { api, fmtINR, fmtDate, fmtDateTime, timeAgo } from "@/lib/api-client";
+    10→import { useUI } from "@/lib/store";
+    11→import { useSession } from "next-auth/react";
+    12→import { KpiCard, PageHeader, StatusBadge, EmptyState, Loading, SectionCard } from "../shared";
+    13→import { Button } from "@/components/ui/button";
+    14→import { Input } from "@/components/ui/input";
+    15→import { Label } from "@/components/ui/label";
+    16→import { Textarea } from "@/components/ui/textarea";
+    17→import { Card } from "@/components/ui/card";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Checkbox } from "@/components/ui/checkbox";
+    20→import {
+    21→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    22→} from "@/components/ui/select";
+    23→import {
+    24→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+    25→} from "@/components/ui/dialog";
+    26→import {
+    27→  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+    28→} from "@/components/ui/sheet";
+    29→import {
+    30→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+    31→  DropdownMenuSeparator, DropdownMenuTrigger,
+    32→} from "@/components/ui/dropdown-menu";
+    33→import {
+    34→  Popover, PopoverContent, PopoverTrigger,
+    35→} from "@/components/ui/popover";
+    36→import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    37→import { toast } from "sonner";
+    38→import {
+    39→  Inbox, Plus, Search, Phone, Mail, MapPin, User, Package, IndianRupee,
+    40→  Calendar, FileText, PhoneCall, ArrowRight, Copy, AlertTriangle, Loader2,
+    41→  Flame, TrendingUp, MessageSquare, History, ArrowLeftRight, Building2,
+    42→  Bookmark, BookmarkCheck, Trash2, CheckSquare, X, ChevronDown, Save,
+    43→  SlidersHorizontal, Filter, LayoutGrid, List, Users,
+    44→} from "lucide-react";
+    45→import { cn } from "@/lib/utils";
+    46→import { EnquiryDetail } from "./enquiry-detail";
+    47→
+    48→const STATUSES = ["all", "NEW", "QUALIFIED", "HOT", "WARM", "COLD", "CONVERTED", "LOST"];
+    49→const SOURCES = ["WEBSITE", "REFERENCE", "EXHIBITION", "COLD_CALL", "EMAIL_CAMPAIGN", "SOCIAL_MEDIA", "TELEMARKETING", "OTHER"];
+    50→
+    51→// Common Indian industrial states for the State filter dropdown
+    52→const INDIAN_STATES = [
+    53→  "Maharashtra", "Gujarat", "Karnataka", "Tamil Nadu", "Delhi",
+    54→  "Telangana", "West Bengal", "Rajasthan", "Uttar Pradesh", "Madhya Pradesh",
+    55→  "Chhattisgarh", "Jharkhand", "Odisha", "Kerala", "Andhra Pradesh",
+    56→  "Punjab", "Haryana", "Bihar", "Assam", "Uttarakhand",
+    57→  "Himachal Pradesh", "Goa", "Jammu & Kashmir",
+    58→];
+    59→
+    60→// Shape of the Enquiries filter state — persisted to SavedView.filters JSON
+    61→type EnquiryFilters = {
+    62→  status: string;
+    63→  search: string;
+    64→  source: string;
+    65→  productId: string;
+    66→  assignedTo: string;
+    67→  state: string;
+    68→  dateFrom: string;
+    69→  dateTo: string;
+    70→  minBudget: string;
+    71→  maxBudget: string;
+    72→  minLeadScore: string;
+    73→  maxLeadScore: string;
+    74→};
+    75→
+    76→const EMPTY_FILTERS: EnquiryFilters = {
+    77→  status: "all",
+    78→  search: "",
+    79→  source: "",
+    80→  productId: "",
+    81→  assignedTo: "",
+    82→  state: "",
+    83→  dateFrom: "",
+    84→  dateTo: "",
+    85→  minBudget: "",
+    86→  maxBudget: "",
+    87→  minLeadScore: "",
+    88→  maxLeadScore: "",
+    89→};
+    90→
+    91→// Compact INR formatter for filter chips (₹50K, ₹5L, ₹1Cr)
+    92→function fmtCompactINR(n: number): string {
+    93→  if (n >= 10000000) return `₹${(n / 10000000).toFixed(n % 10000000 === 0 ? 0 : 1)}Cr`;
+    94→  if (n >= 100000) return `₹${(n / 100000).toFixed(n % 100000 === 0 ? 0 : 1)}L`;
+    95→  if (n >= 1000) return `₹${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`;
+    96→  return `₹${n}`;
+    97→}
+    98→
+    99→// Short date formatter for filter chips (Jun 1, Jun 30)
+   100→function fmtShortDate(s: string): string {
+   101→  const d = new Date(s);
+   102→  if (isNaN(d.getTime())) return s;
+   103→  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+   104→}
+   105→
+   106→export function EnquiriesView() {
+   107→  const { data: session } = useSession();
+   108→  const role = (session?.user as any)?.role || "EXECUTIVE";
+   109→  const { enquiryId, openEnquiry } = useUI();
+   110→  const qc = useQueryClient();
+   111→
+   112→  const [status, setStatus] = useState("all");
+   113→  const [search, setSearch] = useState("");
+   114→  const [page, setPage] = useState(1);
+   115→  const [createOpen, setCreateOpen] = useState(false);
+   116→
+   117→  // Advanced filter state (multi-filter chips)
+   118→  const [source, setSource] = useState("");
+   119→  const [productId, setProductId] = useState("");
+   120→  const [assignedTo, setAssignedTo] = useState("");
+   121→  const [stateFilter, setStateFilter] = useState("");
+   122→  const [dateFrom, setDateFrom] = useState("");
+   123→  const [dateTo, setDateTo] = useState("");
+   124→  const [minBudget, setMinBudget] = useState("");
+   125→  const [maxBudget, setMaxBudget] = useState("");
+   126→  const [minLeadScore, setMinLeadScore] = useState("");
+   127→  const [maxLeadScore, setMaxLeadScore] = useState("");
+   128→
+   129→  // Bulk selection state
+   130→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+   131→  const [bulkMode, setBulkMode] = useState(false);
+   132→  const [saveViewOpen, setSaveViewOpen] = useState(false);
+   133→  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+   134→  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+   135→  const [bulkDeleteReason, setBulkDeleteReason] = useState("");
+   136→
+   137→  // Bulk reassign state — only managers/admins can reassign (gated in UI)
+   138→  const canReassign =
+   139→    role === "MANAGER" || role === "ADMIN" || role === "SUPER_ADMIN";
+   140→  const [bulkReassignOpen, setBulkReassignOpen] = useState(false);
+   141→  const [reassignTargetId, setReassignTargetId] = useState("");
+   142→
+   143→  const [viewMode, setViewMode] = useState<"card" | "table">(() => {
+   144→    if (typeof window !== "undefined") {
+   145→      const stored = window.localStorage.getItem("msih-enquiries-view");
+   146→      if (stored === "card" || stored === "table") return stored;
+   147→    }
+   148→    return "card";
+   149→  });
+   150→  const toggleViewMode = (mode: "card" | "table") => {
+   151→    setViewMode(mode);
+   152→    try { window.localStorage.setItem("msih-enquiries-view", mode); } catch {}
+   153→  };
+   154→
+   155→  // Aggregated filter state object (for roundtrip + chips)
+   156→  const currentFilters: EnquiryFilters = useMemo(
+   157→    () => ({
+   158→      status, search, source, productId, assignedTo, state: stateFilter,
+   159→      dateFrom, dateTo, minBudget, maxBudget, minLeadScore, maxLeadScore,
+   160→    }),
+   161→    [status, search, source, productId, assignedTo, stateFilter, dateFrom, dateTo, minBudget, maxBudget, minLeadScore, maxLeadScore]
+   162→  );
+   163→
+   164→  const { data, isLoading } = useQuery({
+   165→    queryKey: ["enquiries", status, search, source, productId, assignedTo, stateFilter, dateFrom, dateTo, minBudget, maxBudget, minLeadScore, maxLeadScore, page],
+   166→    queryFn: () => {
+   167→      const p = new URLSearchParams({ status, search, page: String(page), limit: "15" });
+   168→      if (source) p.set("source", source);
+   169→      if (productId) p.set("productId", productId);
+   170→      if (assignedTo) p.set("assignedTo", assignedTo);
+   171→      if (stateFilter) p.set("state", stateFilter);
+   172→      if (dateFrom) p.set("dateFrom", dateFrom);
+   173→      if (dateTo) p.set("dateTo", dateTo);
+   174→      if (minBudget) p.set("minBudget", minBudget);
+   175→      if (maxBudget) p.set("maxBudget", maxBudget);
+   176→      if (minLeadScore) p.set("minLeadScore", minLeadScore);
+   177→      if (maxLeadScore) p.set("maxLeadScore", maxLeadScore);
+   178→      return api<any>(`/api/enquiries?${p}`);
+   179→    },
+   180→  });
+   181→
+   182→  const { data: productsData } = useQuery({
+   183→    queryKey: ["products-list"],
+   184→    queryFn: () => api<any>("/api/products"),
+   185→  });
+   186→  const { data: usersData } = useQuery({
+   187→    queryKey: ["users-list"],
+   188→    queryFn: () => api<any>("/api/users"),
+   189→  });
+   190→
+   191→  // Active users available for reassignment (executives + managers)
+   192→  const reassignableUsers = useMemo(
+   193→    () =>
+   194→      (usersData?.users || []).filter(
+   195→        (u: any) => u.active && (u.role === "EXECUTIVE" || u.role === "MANAGER")
+   196→      ),
+   197→    [usersData]
+   198→  );
+   199→  const reassignTargetUser = reassignableUsers.find(
+   200→    (u: any) => u.id === reassignTargetId
+   201→  );
+   202→
+   203→  // Saved views for this entity
+   204→  const { data: savedViewsData, refetch: refetchViews } = useQuery({
+   205→    queryKey: ["saved-views", "ENQUIRY"],
+   206→    queryFn: () => api<any>("/api/saved-views?entity=ENQUIRY"),
+   207→  });
+   208→  const savedViews = savedViewsData?.views || [];
+   209→  const defaultView = savedViews.find((v: any) => v.isDefault);
+   210→
+   211→  // Apply default view on first load (once data arrives and no manual selection yet)
+   212→  const [defaultApplied, setDefaultApplied] = useState(false);
+   213→  useEffect(() => {
+   214→    if (!defaultApplied && defaultView && status === "all" && !search && !activeViewId) {
+   215→      try {
+   216→        const f = JSON.parse(defaultView.filters) as Partial<EnquiryFilters>;
+   217→        // eslint-disable-next-line react-hooks/set-state-in-effect
+   218→        if (f.status) setStatus(f.status);
+   219→        if (f.search !== undefined) setSearch(f.search);
+   220→        if (f.source) setSource(f.source);
+   221→        if (f.productId) setProductId(f.productId);
+   222→        if (f.assignedTo) setAssignedTo(f.assignedTo);
+   223→        if (f.state) setStateFilter(f.state);
+   224→        if (f.dateFrom) setDateFrom(f.dateFrom);
+   225→        if (f.dateTo) setDateTo(f.dateTo);
+   226→        if (f.minBudget) setMinBudget(f.minBudget);
+   227→        if (f.maxBudget) setMaxBudget(f.maxBudget);
+   228→        if (f.minLeadScore) setMinLeadScore(f.minLeadScore);
+   229→        if (f.maxLeadScore) setMaxLeadScore(f.maxLeadScore);
+   230→        setActiveViewId(defaultView.id);
+   231→      } catch {}
+   232→      setDefaultApplied(true);
+   233→    }
+   234→  }, [defaultView, defaultApplied, status, search, activeViewId]);
+   235→
+   236→  const selected = enquiryId;
+   237→  const enquiries = data?.enquiries || [];
+   238→  const total = data?.total || 0;
+   239→  const totalPages = data?.totalPages || 1;
+   240→
+   241→  // Bulk selection helpers
+   242→  const allOnPageSelected = enquiries.length > 0 && enquiries.every((e: any) => selectedIds.has(e.id));
+   243→  const toggleAll = () => {
+   244→    const next = new Set(selectedIds);
+   245→    if (allOnPageSelected) {
+   246→      enquiries.forEach((e: any) => next.delete(e.id));
+   247→    } else {
+   248→      enquiries.forEach((e: any) => next.add(e.id));
+   249→    }
+   250→    setSelectedIds(next);
+   251→  };
+   252→  const toggleOne = (id: string) => {
+   253→    const next = new Set(selectedIds);
+   254→    if (next.has(id)) next.delete(id);
+   255→    else next.add(id);
+   256→    setSelectedIds(next);
+   257→  };
+   258→
+   259→  // Save current view
+   260→  const saveViewMut = useMutation({
+   261→    mutationFn: (body: any) => api<any>("/api/saved-views", { method: "POST", body: JSON.stringify(body) }),
+   262→    onSuccess: () => {
+   263→      toast.success("View saved");
+   264→      refetchViews();
+   265→      setSaveViewOpen(false);
+   266→    },
+   267→    onError: (e: any) => toast.error(e.message || "Failed to save view"),
+   268→  });
+   269→
+   270→  // Delete saved view
+   271→  const deleteViewMut = useMutation({
+   272→    mutationFn: (id: string) => api<any>(`/api/saved-views/${id}`, { method: "DELETE" }),
+   273→    onSuccess: () => {
+   274→      toast.success("View deleted");
+   275→      refetchViews();
+   276→    },
+   277→    onError: (e: any) => toast.error(e.message || "Failed to delete view"),
+   278→  });
+   279→
+   280→  // Set as default
+   281→  const setDefaultMut = useMutation({
+   282→    mutationFn: ({ id, isDefault }: { id: string; isDefault: boolean }) =>
+   283→      api<any>(`/api/saved-views/${id}`, { method: "PATCH", body: JSON.stringify({ isDefault }) }),
+   284→    onSuccess: () => {
+   285→      toast.success("Default view updated");
+   286→      refetchViews();
+   287→    },
+   288→    onError: (e: any) => toast.error(e.message || "Failed"),
+   289→  });
+   290→
+   291→  const applyView = (v: any) => {
+   292→    try {
+   293→      const f = JSON.parse(v.filters) as Partial<EnquiryFilters>;
+   294→      setStatus(f.status || "all");
+   295→      setSearch(f.search || "");
+   296→      setSource(f.source || "");
+   297→      setProductId(f.productId || "");
+   298→      setAssignedTo(f.assignedTo || "");
+   299→      setStateFilter(f.state || "");
+   300→      setDateFrom(f.dateFrom || "");
+   301→      setDateTo(f.dateTo || "");
+   302→      setMinBudget(f.minBudget || "");
+   303→      setMaxBudget(f.maxBudget || "");
+   304→      setMinLeadScore(f.minLeadScore || "");
+   305→      setMaxLeadScore(f.maxLeadScore || "");
+   306→      setPage(1);
+   307→      setActiveViewId(v.id);
+   308→      setSelectedIds(new Set());
+   309→      toast.info(`Applied view: ${v.name}`);
+   310→    } catch {
+   311→      toast.error("Invalid view data");
+   312→    }
+   313→  };
+   314→
+   315→  const clearFilters = () => {
+   316→    setStatus("all");
+   317→    setSearch("");
+   318→    setSource("");
+   319→    setProductId("");
+   320→    setAssignedTo("");
+   321→    setStateFilter("");
+   322→    setDateFrom("");
+   323→    setDateTo("");
+   324→    setMinBudget("");
+   325→    setMaxBudget("");
+   326→    setMinLeadScore("");
+   327→    setMaxLeadScore("");
+   328→    setPage(1);
+   329→    setActiveViewId(null);
+   330→    setSelectedIds(new Set());
+   331→  };
+   332→
+   333→  // Per-filter chip clear helpers (each resets a single filter dimension, preserving others)
+   334→  const clearOne = (key: keyof EnquiryFilters) => {
+   335→    setPage(1);
+   336→    setActiveViewId(null);
+   337→    switch (key) {
+   338→      case "status": setStatus("all"); break;
+   339→      case "search": setSearch(""); break;
+   340→      case "source": setSource(""); break;
+   341→      case "productId": setProductId(""); break;
+   342→      case "assignedTo": setAssignedTo(""); break;
+   343→      case "state": setStateFilter(""); break;
+   344→      case "dateFrom": setDateFrom(""); break;
+   345→      case "dateTo": setDateTo(""); break;
+   346→      case "minBudget": setMinBudget(""); break;
+   347→      case "maxBudget": setMaxBudget(""); break;
+   348→      case "minLeadScore": setMinLeadScore(""); break;
+   349→      case "maxLeadScore": setMaxLeadScore(""); break;
+   350→    }
+   351→  };
+   352→
+   353→  // Bulk status update
+   354→  const bulkStatusMut = useMutation({
+   355→    mutationFn: async ({ ids, newStatus }: { ids: string[]; newStatus: string }) => {
+   356→      const results = await Promise.allSettled(
+   357→        ids.map((id) =>
+   358→          api<any>(`/api/enquiries/${id}`, { method: "PATCH", body: JSON.stringify({ status: newStatus }) })
+   359→        )
+   360→      );
+   361→      const ok = results.filter((r) => r.status === "fulfilled").length;
+   362→      const fail = results.filter((r) => r.status === "rejected").length;
+   363→      return { ok, fail };
+   364→    },
+   365→    onSuccess: ({ ok, fail }) => {
+   366→      toast.success(`Updated ${ok} enquiries${fail ? `, ${fail} failed` : ""}`);
+   367→      setSelectedIds(new Set());
+   368→      setBulkMode(false);
+   369→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   370→      qc.invalidateQueries({ queryKey: ["dashboard"] });
+   371→    },
+   372→    onError: (e: any) => toast.error(e.message || "Bulk update failed"),
+   373→  });
+   374→
+   375→  // Bulk reassign (managers/admins only) — calls /api/enquiries/bulk-reassign
+   376→  const bulkReassignMut = useMutation({
+   377→    mutationFn: ({ ids, assignedTo }: { ids: string[]; assignedTo: string }) =>
+   378→      api<any>("/api/enquiries/bulk-reassign", {
+   379→        method: "POST",
+   380→        body: JSON.stringify({ enquiryIds: ids, assignedTo }),
+   381→      }),
+   382→    onSuccess: (data) => {
+   383→      const targetName = data?.targetUser?.name || "new executive";
+   384→      const updated = data?.updated ?? 0;
+   385→      const skipped = data?.skipped ?? 0;
+   386→      const errCount = data?.errors?.length ?? 0;
+   387→      if (updated === 0 && skipped > 0) {
+   388→        toast.info(
+   389→          `No changes — all ${skipped} selected enquiries are already assigned to ${targetName}`
+   390→        );
+   391→      } else {
+   392→        toast.success(
+   393→          `Reassigned ${updated} enquiries to ${targetName}${
+   394→            skipped ? ` · ${skipped} already assigned` : ""
+   395→          }${errCount ? ` · ${errCount} not found` : ""}`
+   396→        );
+   397→      }
+   398→      setSelectedIds(new Set());
+   399→      setBulkMode(false);
+   400→      setBulkReassignOpen(false);
+   401→      setReassignTargetId("");
+   402→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   403→      qc.invalidateQueries({ queryKey: ["dashboard"] });
+   404→    },
+   405→    onError: (e: any) => toast.error(e.message || "Bulk reassign failed"),
+   406→  });
+   407→
+   408→  // Bulk delete request
+   409→  const bulkDeleteMut = useMutation({
+   410→    mutationFn: async ({ ids, reason }: { ids: string[]; reason: string }) => {
+   411→      const results = await Promise.allSettled(
+   412→        ids.map((id) =>
+   413→          api<any>(`/api/enquiries/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) })
+   414→        )
+   415→      );
+   416→      const ok = results.filter((r) => r.status === "fulfilled").length;
+   417→      const fail = results.filter((r) => r.status === "rejected").length;
+   418→      return { ok, fail };
+   419→    },
+   420→    onSuccess: ({ ok, fail }) => {
+   421→      toast.success(`Requested deletion for ${ok} enquiries${fail ? `, ${fail} failed` : ""}`);
+   422→      setSelectedIds(new Set());
+   423→      setBulkMode(false);
+   424→      setBulkDeleteOpen(false);
+   425→      setBulkDeleteReason("");
+   426→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   427→    },
+   428→    onError: (e: any) => toast.error(e.message || "Bulk delete failed"),
+   429→  });
+   430→
+   431→  // Build the list of active filter chips for the chips row
+   432→  const products = productsData?.products || [];
+   433→  const users = usersData?.users || [];
+   434→
+   435→  const chips = useMemo(() => {
+   436→    const out: { key: keyof EnquiryFilters; label: string }[] = [];
+   437→    if (currentFilters.status !== "all") out.push({ key: "status", label: `Status: ${currentFilters.status}` });
+   438→    if (currentFilters.search) out.push({ key: "search", label: `Search: "${currentFilters.search}"` });
+   439→    if (currentFilters.source) out.push({ key: "source", label: `Source: ${currentFilters.source.replace(/_/g, " ")}` });
+   440→    if (currentFilters.productId) {
+   441→      const p = products.find((x: any) => x.id === currentFilters.productId);
+   442→      out.push({ key: "productId", label: `Product: ${p?.name || "—"}` });
+   443→    }
+   444→    if (currentFilters.assignedTo) {
+   445→      const u = users.find((x: any) => x.id === currentFilters.assignedTo);
+   446→      out.push({ key: "assignedTo", label: `Executive: ${u?.name || "—"}` });
+   447→    }
+   448→    if (currentFilters.state) out.push({ key: "state", label: `State: ${currentFilters.state}` });
+   449→    if (currentFilters.dateFrom || currentFilters.dateTo) {
+   450→      if (currentFilters.dateFrom && currentFilters.dateTo) {
+   451→        out.push({ key: "dateFrom", label: `Date: ${fmtShortDate(currentFilters.dateFrom)} – ${fmtShortDate(currentFilters.dateTo)}` });
+   452→      } else if (currentFilters.dateFrom) {
+   453→        out.push({ key: "dateFrom", label: `Date: ≥ ${fmtShortDate(currentFilters.dateFrom)}` });
+   454→      } else {
+   455→        out.push({ key: "dateTo", label: `Date: ≤ ${fmtShortDate(currentFilters.dateTo)}` });
+   456→      }
+   457→    }
+   458→    if (currentFilters.minBudget || currentFilters.maxBudget) {
+   459→      if (currentFilters.minBudget && currentFilters.maxBudget) {
+   460→        out.push({ key: "minBudget", label: `Budget: ${fmtCompactINR(Number(currentFilters.minBudget))} – ${fmtCompactINR(Number(currentFilters.maxBudget))}` });
+   461→      } else if (currentFilters.minBudget) {
+   462→        out.push({ key: "minBudget", label: `Budget: ≥ ${fmtCompactINR(Number(currentFilters.minBudget))}` });
+   463→      } else {
+   464→        out.push({ key: "maxBudget", label: `Budget: ≤ ${fmtCompactINR(Number(currentFilters.maxBudget))}` });
+   465→      }
+   466→    }
+   467→    if (currentFilters.minLeadScore || currentFilters.maxLeadScore) {
+   468→      if (currentFilters.minLeadScore && currentFilters.maxLeadScore) {
+   469→        out.push({ key: "minLeadScore", label: `Lead Score: ${currentFilters.minLeadScore} – ${currentFilters.maxLeadScore}` });
+   470→      } else if (currentFilters.minLeadScore) {
+   471→        out.push({ key: "minLeadScore", label: `Lead Score: ≥ ${currentFilters.minLeadScore}` });
+   472→      } else {
+   473→        out.push({ key: "maxLeadScore", label: `Lead Score: ≤ ${currentFilters.maxLeadScore}` });
+   474→      }
+   475→    }
+   476→    return out;
+   477→  }, [currentFilters, products, users]);
+   478→
+   479→  const advancedFilterCount = chips.filter((c) => c.key !== "status" && c.key !== "search").length;
+   480→  const activeFilters = chips.length > 0;
+   481→
+   482→  return (
+   483→    <div className="space-y-5">
+   484→      <PageHeader
+   485→        title="Enquiry Management"
+   486→        description="Capture and track customer enquiries — from lead to order."
+   487→        icon={Inbox}
+   488→        actions={
+   489→          <div className="flex items-center gap-2">
+   490→            <Button variant="outline" size="sm" onClick={() => setBulkMode((b) => !b)} aria-pressed={bulkMode}>
+   491→              <CheckSquare className="mr-1.5 h-4 w-4" /> {bulkMode ? "Exit Bulk" : "Bulk Select"}
+   492→            </Button>
+   493→            <Button onClick={() => setCreateOpen(true)}>
+   494→              <Plus className="mr-2 h-4 w-4" /> New Enquiry
+   495→            </Button>
+   496→          </div>
+   497→        }
+   498→      />
+   499→
+   500→      {/* mini stats */}
+   501→      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+   502→        <KpiCard label="Total Enquiries" value={total} icon={Inbox} accent="blue" />
+   503→        <KpiCard label="Hot Leads" value={enquiries.filter((e: any) => e.status === "HOT").length} icon={Flame} accent="red" />
+   504→        <KpiCard label="Open Pipeline" value={enquiries.filter((e: any) => !["CONVERTED", "LOST"].includes(e.status)).length} icon={TrendingUp} accent="amber" />
+   505→        <KpiCard label="Converted" value={enquiries.filter((e: any) => e.status === "CONVERTED").length} icon={Calendar} accent="emerald" />
+   506→      </div>
+   507→
+   508→      {/* Saved Views bar */}
+   509→      <SavedViewsBar
+   510→        views={savedViews}
+   511→        activeViewId={activeViewId}
+   512→        onApply={applyView}
+   513→        onDelete={(id) => deleteViewMut.mutate(id)}
+   514→        onSetDefault={(id, isDefault) => setDefaultMut.mutate({ id, isDefault })}
+   515→        onSaveCurrent={() => setSaveViewOpen(true)}
+   516→        onClear={clearFilters}
+   517→        hasActiveFilters={activeFilters}
+   518→      />
+   519→
+   520→      {/* Bulk actions toolbar */}
+   521→      {bulkMode && (
+   522→        <Card className="border-primary/30 bg-primary/5 p-3">
+   523→          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   524→            <div className="flex items-center gap-3">
+   525→              <Badge variant="secondary" className="font-semibold">{selectedIds.size} selected</Badge>
+   526→              <Button variant="ghost" size="sm" onClick={toggleAll} disabled={enquiries.length === 0}>
+   527→                {allOnPageSelected ? "Deselect page" : "Select page"}
+   528→              </Button>
+   529→              {selectedIds.size > 0 && (
+   530→                <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+   531→                  <X className="mr-1 h-3.5 w-3.5" /> Clear
+   532→                </Button>
+   533→              )}
+   534→            </div>
+   535→            {selectedIds.size > 0 && (
+   536→              <div className="flex flex-wrap items-center gap-2">
+   537→                <DropdownMenu>
+   538→                  <DropdownMenuTrigger asChild>
+   539→                    <Button variant="outline" size="sm" disabled={bulkStatusMut.isPending}>
+   540→                      {bulkStatusMut.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="mr-1.5 h-3.5 w-3.5" />}
+   541→                      Set Status <ChevronDown className="ml-1 h-3 w-3" />
+   542→                    </Button>
+   543→                  </DropdownMenuTrigger>
+   544→                  <DropdownMenuContent>
+   545→                    <DropdownMenuLabel>Change status for {selectedIds.size} enquiries</DropdownMenuLabel>
+   546→                    <DropdownMenuSeparator />
+   547→                    {STATUSES.filter((s) => s !== "all").map((s) => (
+   548→                      <DropdownMenuItem key={s} onClick={() => bulkStatusMut.mutate({ ids: [...selectedIds], newStatus: s })}>
+   549→                        <span className="capitalize">{s}</span>
+   550→                      </DropdownMenuItem>
+   551→                    ))}
+   552→                  </DropdownMenuContent>
+   553→                </DropdownMenu>
+   554→                {canReassign && (
+   555→                  <Button
+   556→                    variant="outline"
+   557→                    size="sm"
+   558→                    disabled={bulkReassignMut.isPending}
+   559→                    onClick={() => setBulkReassignOpen(true)}
+   560→                    title={canReassign ? "Reassign selected enquiries to a different executive" : "Only managers/admins can reassign"}
+   561→                  >
+   562→                    {bulkReassignMut.isPending ? (
+   563→                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+   564→                    ) : (
+   565→                      <Users className="mr-1.5 h-3.5 w-3.5" />
+   566→                    )}
+   567→                    Reassign
+   568→                  </Button>
+   569→                )}
+   570→                <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700" onClick={() => setBulkDeleteOpen(true)}>
+   571→                  <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Request Delete
+   572→                </Button>
+   573→              </div>
+   574→            )}
+   575→          </div>
+   576→        </Card>
+   577→      )}
+   578→
+   579→      {/* filters */}
+   580→      <Card className="p-4">
+   581→        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+   582→          <Tabs value={status} onValueChange={(v) => { setStatus(v); setPage(1); setActiveViewId(null); }}>
+   583→            <TabsList className="flex h-auto flex-wrap gap-1 bg-muted/60">
+   584→              {STATUSES.map((s) => (
+   585→                <TabsTrigger key={s} value={s} className="text-xs capitalize">
+   586→                  {s === "all" ? "All" : s}
+   587→                </TabsTrigger>
+   588→              ))}
+   589→            </TabsList>
+   590→          </Tabs>
+   591→          <div className="flex items-center gap-2">
+   592→            <AdvancedFiltersButton
+   593→              count={advancedFilterCount}
+   594→              source={source}
+   595→              setSource={(v) => { setSource(v); setPage(1); setActiveViewId(null); }}
+   596→              productId={productId}
+   597→              setProductId={(v) => { setProductId(v); setPage(1); setActiveViewId(null); }}
+   598→              assignedTo={assignedTo}
+   599→              setAssignedTo={(v) => { setAssignedTo(v); setPage(1); setActiveViewId(null); }}
+   600→              stateFilter={stateFilter}
+   601→              setStateFilter={(v) => { setStateFilter(v); setPage(1); setActiveViewId(null); }}
+   602→              dateFrom={dateFrom}
+   603→              setDateFrom={(v) => { setDateFrom(v); setPage(1); setActiveViewId(null); }}
+   604→              dateTo={dateTo}
+   605→              setDateTo={(v) => { setDateTo(v); setPage(1); setActiveViewId(null); }}
+   606→              minBudget={minBudget}
+   607→              setMinBudget={(v) => { setMinBudget(v); setPage(1); setActiveViewId(null); }}
+   608→              maxBudget={maxBudget}
+   609→              setMaxBudget={(v) => { setMaxBudget(v); setPage(1); setActiveViewId(null); }}
+   610→              minLeadScore={minLeadScore}
+   611→              setMinLeadScore={(v) => { setMinLeadScore(v); setPage(1); setActiveViewId(null); }}
+   612→              maxLeadScore={maxLeadScore}
+   613→              setMaxLeadScore={(v) => { setMaxLeadScore(v); setPage(1); setActiveViewId(null); }}
+   614→              onClearAll={() => {
+   615→                setSource(""); setProductId(""); setAssignedTo(""); setStateFilter("");
+   616→                setDateFrom(""); setDateTo(""); setMinBudget(""); setMaxBudget("");
+   617→                setMinLeadScore(""); setMaxLeadScore(""); setPage(1); setActiveViewId(null);
+   618→              }}
+   619→              products={products}
+   620→              users={users}
+   621→              role={role}
+   622→            />
+   623→            <div className="relative w-full lg:w-72">
+   624→              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   625→              <Input
+   626→                placeholder="Search company, contact, mobile…"
+   627→                value={search}
+   628→                onChange={(e) => { setSearch(e.target.value); setPage(1); setActiveViewId(null); }}
+   629→                className="pl-9"
+   630→              />
+   631→            </div>
+   632→            <div className="flex items-center rounded-md border border-border bg-card p-0.5" role="group" aria-label="View mode">
+   633→              <button
+   634→                type="button"
+   635→                onClick={() => toggleViewMode("card")}
+   636→                aria-pressed={viewMode === "card"}
+   637→                aria-label="Card view"
+   638→                title="Card view"
+   639→                className={cn(
+   640→                  "inline-flex h-8 w-8 items-center justify-center rounded transition",
+   641→                  viewMode === "card"
+   642→                    ? "bg-primary/10 text-primary"
+   643→                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+   644→                )}
+   645→              >
+   646→                <LayoutGrid className="h-4 w-4" />
+   647→              </button>
+   648→              <button
+   649→                type="button"
+   650→                onClick={() => toggleViewMode("table")}
+   651→                aria-pressed={viewMode === "table"}
+   652→                aria-label="Table view"
+   653→                title="Table view"
+   654→                className={cn(
+   655→                  "inline-flex h-8 w-8 items-center justify-center rounded transition",
+   656→                  viewMode === "table"
+   657→                    ? "bg-primary/10 text-primary"
+   658→                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+   659→                )}
+   660→              >
+   661→                <List className="h-4 w-4" />
+   662→              </button>
+   663→            </div>
+   664→          </div>
+   665→        </div>
+   666→      </Card>
+   667→
+   668→      {/* Active filter chips row */}
+   669→      {chips.length > 0 && (
+   670→        <FilterChipsRow chips={chips} onClear={clearOne} onClearAll={clearFilters} />
+   671→      )}
+   672→
+   673→      {/* list */}
+   674→      {isLoading ? (
+   675→        <Loading label="Loading enquiries…" />
+   676→      ) : enquiries.length === 0 ? (
+   677→        <EmptyState
+   678→          icon={Inbox}
+   679→          title="No enquiries found"
+   680→          description="Try adjusting your filters or create a new enquiry."
+   681→          action={<Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" /> New Enquiry</Button>}
+   682→        />
+   683→      ) : viewMode === "table" ? (
+   684→        <>
+   685→          <div className="overflow-hidden rounded-xl border border-border bg-card">
+   686→            {/* Desktop table */}
+   687→            <table className="hidden w-full text-sm md:table" role="table" aria-label="Enquiries table">
+   688→              <thead className="border-b border-border bg-muted/40 text-left">
+   689→                <tr>
+   690→                  {bulkMode && <th className="w-10 px-3 py-2.5" scope="col" />}
+   691→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Company</th>
+   692→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Product</th>
+   693→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Status</th>
+   694→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Score</th>
+   695→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Budget</th>
+   696→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Executive</th>
+   697→                  <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground" scope="col">Date</th>
+   698→                  <th className="w-8 px-3 py-2.5" scope="col" />
+   699→                </tr>
+   700→              </thead>
+   701→              <tbody className="divide-y divide-border/60">
+   702→                {enquiries.map((e: any) => {
+   703→                  const isSelected = selectedIds.has(e.id);
+   704→                  return (
+   705→                    <tr
+   706→                      key={e.id}
+   707→                      onClick={() => { if (!bulkMode) openEnquiry(e.id); }}
+   708→                      className={cn(
+   709→                        "group transition-colors",
+   710→                        bulkMode && isSelected ? "bg-primary/5" : "",
+   711→                        bulkMode ? "cursor-default" : "cursor-pointer hover:bg-muted/40"
+   712→                      )}
+   713→                    >
+   714→                      {bulkMode && (
+   715→                        <td className="px-3 py-3">
+   716→                          <Checkbox
+   717→                            checked={isSelected}
+   718→                            onCheckedChange={() => toggleOne(e.id)}
+   719→                            onClick={(ev) => ev.stopPropagation()}
+   720→                            aria-label={`Select ${e.company}`}
+   721→                          />
+   722→                        </td>
+   723→                      )}
+   724→                      <td className="px-3 py-3">
+   725→                        <div className="flex items-center gap-2">
+   726→                          <div className="shrink-0 rounded-md bg-primary/10 p-1.5 text-primary ring-1 ring-primary/15">
+   727→                            <Building2 className="h-3.5 w-3.5" />
+   728→                          </div>
+   729→                          <div className="min-w-0">
+   730→                            <p className="truncate font-medium text-foreground">{e.company}</p>
+   731→                            <p className="truncate text-xs text-muted-foreground">{e.enquiryNumber} · {e.contactPerson}</p>
+   732→                          </div>
+   733→                        </div>
+   734→                      </td>
+   735→                      <td className="max-w-[180px] truncate px-3 py-3 text-muted-foreground">{e.productInterested}</td>
+   736→                      <td className="px-3 py-3"><StatusBadge status={e.status} /></td>
+   737→                      <td className="px-3 py-3">
+   738→                        {e.leadScore >= 70 ? (
+   739→                          <Badge className="bg-red-500/15 text-red-600 dark:text-red-400"><Flame className="mr-1 h-3 w-3" />{e.leadScore}</Badge>
+   740→                        ) : (
+   741→                          <span className="text-muted-foreground">{e.leadScore}</span>
+   742→                        )}
+   743→                      </td>
+   744→                      <td className="px-3 py-3 text-muted-foreground">{e.budget ? fmtINR(e.budget) : "—"}</td>
+   745→                      <td className="px-3 py-3 text-muted-foreground">{e.assignedExecutive?.name?.split(" ")[0] || "—"}</td>
+   746→                      <td className="px-3 py-3 text-muted-foreground">{fmtDate(e.date)}</td>
+   747→                      <td className="px-3 py-3">
+   748→                        {!bulkMode && <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />}
+   749→                      </td>
+   750→                    </tr>
+   751→                  );
+   752→                })}
+   753→              </tbody>
+   754→            </table>
+   755→            {/* Mobile stacked rows (when table mode is selected) */}
+   756→            <div className="divide-y divide-border/60 md:hidden">
+   757→              {enquiries.map((e: any) => {
+   758→                const isSelected = selectedIds.has(e.id);
+   759→                return (
+   760→                  <div
+   761→                    key={e.id}
+   762→                    onClick={() => { if (!bulkMode) openEnquiry(e.id); }}
+   763→                    className={cn(
+   764→                      "flex items-start gap-3 p-3 transition",
+   765→                      bulkMode && isSelected ? "bg-primary/5" : "",
+   766→                      bulkMode ? "cursor-default" : "cursor-pointer active:bg-muted/40"
+   767→                    )}
+   768→                  >
+   769→                    {bulkMode && (
+   770→                      <Checkbox
+   771→                        checked={isSelected}
+   772→                        onCheckedChange={() => toggleOne(e.id)}
+   773→                        onClick={(ev) => ev.stopPropagation()}
+   774→                        aria-label={`Select ${e.company}`}
+   775→                        className="mt-1"
+   776→                      />
+   777→                    )}
+   778→                    <div className="shrink-0 rounded-md bg-primary/10 p-1.5 text-primary ring-1 ring-primary/15">
+   779→                      <Building2 className="h-3.5 w-3.5" />
+   780→                    </div>
+   781→                    <div className="min-w-0 flex-1">
+   782→                      <div className="flex items-center justify-between gap-2">
+   783→                        <p className="truncate font-medium text-foreground">{e.company}</p>
+   784→                        <StatusBadge status={e.status} />
+   785→                      </div>
+   786→                      <p className="truncate text-xs text-muted-foreground">{e.contactPerson} · {e.productInterested}</p>
+   787→                      <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+   788→                        <span>{e.assignedExecutive?.name?.split(" ")[0] || "—"}</span>
+   789→                        <span>{fmtDate(e.date)}</span>
+   790→                      </div>
+   791→                    </div>
+   792→                  </div>
+   793→                );
+   794→              })}
+   795→            </div>
+   796→          </div>
+   797→
+   798→          {/* pagination */}
+   799→          {totalPages > 1 && (
+   800→            <div className="flex items-center justify-between">
+   801→              <p className="text-xs text-muted-foreground">Page {page} of {totalPages} · {total} enquiries</p>
+   802→              <div className="flex gap-2">
+   803→                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+   804→                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+   805→              </div>
+   806→            </div>
+   807→          )}
+   808→        </>
+   809→      ) : (
+   810→        <>
+   811→          <div className="grid gap-3">
+   812→            {enquiries.map((e: any) => {
+   813→              const isSelected = selectedIds.has(e.id);
+   814→              return (
+   815→                <div
+   816→                  key={e.id}
+   817→                  className={cn(
+   818→                    "group relative rounded-xl border bg-card p-4 transition-all duration-200",
+   819→                    bulkMode && isSelected ? "border-primary ring-1 ring-primary/30" : "border-border",
+   820→                    bulkMode ? "cursor-default" : "cursor-pointer hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5"
+   821→                  )}
+   822→                  onClick={() => { if (!bulkMode) openEnquiry(e.id); }}
+   823→                >
+   824→                  {/* Animated left accent stripe */}
+   825→                  <div className="pointer-events-none absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-primary/0 transition-all duration-200 group-hover:bg-primary/60" aria-hidden />
+   826→                  {bulkMode && (
+   827→                    <div className="absolute left-3 top-1/2 -translate-y-1/2 z-10">
+   828→                      <Checkbox
+   829→                        checked={isSelected}
+   830→                        onCheckedChange={() => toggleOne(e.id)}
+   831→                        onClick={(ev) => ev.stopPropagation()}
+   832→                        aria-label={`Select ${e.company}`}
+   833→                      />
+   834→                    </div>
+   835→                  )}
+   836→                  <div className={cn("flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between", bulkMode && "pl-8")}>
+   837→                    <div className="flex items-start gap-3">
+   838→                      <div className="shrink-0 rounded-lg bg-primary/10 p-2.5 text-primary ring-1 ring-primary/15 transition-transform duration-200 group-hover:scale-105">
+   839→                        <Building2 className="h-5 w-5" />
+   840→                      </div>
+   841→                      <div className="min-w-0">
+   842→                        <div className="flex flex-wrap items-center gap-2">
+   843→                          <p className="font-semibold text-foreground">{e.company}</p>
+   844→                          <StatusBadge status={e.status} />
+   845→                          {e.leadScore >= 70 && <Badge className="bg-red-500/15 text-red-600 dark:text-red-400"><Flame className="mr-1 h-3 w-3" />{e.leadScore}</Badge>}
+   846→                        </div>
+   847→                        <p className="mt-0.5 text-sm text-muted-foreground">
+   848→                          {e.enquiryNumber} · {e.contactPerson} · <span className="font-medium">{e.productInterested}</span>
+   849→                        </p>
+   850→                        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+   851→                          <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{e.mobile}</span>
+   852→                          {e.city && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{e.city}</span>}
+   853→                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{fmtDate(e.date)}</span>
+   854→                          {e.budget && <span className="flex items-center gap-1"><IndianRupee className="h-3 w-3" />{fmtINR(e.budget)}</span>}
+   855→                        </div>
+   856→                      </div>
+   857→                    </div>
+   858→                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+   859→                      <div className="text-center">
+   860→                        <p className="font-semibold text-foreground">{e._count?.followUps || 0}</p>
+   861→                        <p>Follow-ups</p>
+   862→                      </div>
+   863→                      <div className="text-center">
+   864→                        <p className="font-semibold text-foreground">{e._count?.quotations || 0}</p>
+   865→                        <p>Quotations</p>
+   866→                      </div>
+   867→                      <div className="hidden text-center sm:block">
+   868→                        <p className="font-semibold text-foreground">{e.assignedExecutive?.name?.split(" ")[0] || "—"}</p>
+   869→                        <p>Executive</p>
+   870→                      </div>
+   871→                      {!bulkMode && <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />}
+   872→                    </div>
+   873→                  </div>
+   874→                </div>
+   875→              );
+   876→            })}
+   877→          </div>
+   878→
+   879→          {/* pagination */}
+   880→          {totalPages > 1 && (
+   881→            <div className="flex items-center justify-between">
+   882→              <p className="text-xs text-muted-foreground">Page {page} of {totalPages} · {total} enquiries</p>
+   883→              <div className="flex gap-2">
+   884→                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+   885→                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+   886→              </div>
+   887→            </div>
+   888→          )}
+   889→        </>
+   890→      )}
+   891→
+   892→      {/* create dialog */}
+   893→      <CreateEnquiryDialog
+   894→        open={createOpen}
+   895→        onOpenChange={setCreateOpen}
+   896→        products={productsData?.products || []}
+   897→        users={usersData?.users || []}
+   898→        role={role}
+   899→        currentUserId={(session?.user as any)?.id}
+   900→        onCreated={(id) => { setCreateOpen(false); openEnquiry(id); }}
+   901→      />
+   902→
+   903→      {/* detail */}
+   904→      <EnquiryDetail enquiryId={selected} onClose={() => openEnquiry(null)} />
+   905→
+   906→      {/* Save View Dialog */}
+   907→      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+   908→        <DialogContent className="sm:max-w-md">
+   909→          <DialogHeader>
+   910→            <DialogTitle className="flex items-center gap-2"><Save className="h-5 w-5 text-primary" /> Save Current View</DialogTitle>
+   911→            <DialogDescription>Save the current filter state as a reusable preset.</DialogDescription>
+   912→          </DialogHeader>
+   913→          <SaveViewForm
+   914→            chips={chips}
+   915→            isDefault={savedViews.length === 0}
+   916→            onSave={(name, isDefault) => saveViewMut.mutate({ name, entity: "ENQUIRY", filters: currentFilters, isDefault })}
+   917→            loading={saveViewMut.isPending}
+   918→          />
+   919→        </DialogContent>
+   920→      </Dialog>
+   921→
+   922→      {/* Bulk Delete Dialog */}
+   923→      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+   924→        <DialogContent className="sm:max-w-md">
+   925→          <DialogHeader>
+   926→            <DialogTitle className="flex items-center gap-2 text-red-600"><AlertTriangle className="h-5 w-5" /> Request Bulk Deletion</DialogTitle>
+   927→            <DialogDescription>
+   928→              This will submit deletion requests for <strong>{selectedIds.size}</strong> enquiries. An admin must approve each request before deletion occurs.
+   929→            </DialogDescription>
+   930→          </DialogHeader>
+   931→          <div className="space-y-2 py-2">
+   932→            <Label>Reason for deletion *</Label>
+   933→            <Textarea
+   934→              value={bulkDeleteReason}
+   935→              onChange={(e) => setBulkDeleteReason(e.target.value)}
+   936→              placeholder="e.g. Duplicate entries, test data, outdated records…"
+   937→              rows={3}
+   938→            />
+   939→          </div>
+   940→          <DialogFooter>
+   941→            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>Cancel</Button>
+   942→            <Button
+   943→              variant="destructive"
+   944→              disabled={!bulkDeleteReason.trim() || bulkDeleteMut.isPending}
+   945→              onClick={() => bulkDeleteMut.mutate({ ids: [...selectedIds], reason: bulkDeleteReason.trim() })}
+   946→            >
+   947→              {bulkDeleteMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+   948→              Submit {selectedIds.size} Deletion Requests
+   949→            </Button>
+   950→          </DialogFooter>
+   951→        </DialogContent>
+   952→      </Dialog>
+   953→
+   954→      {/* Bulk Reassign Dialog (managers/admins only) */}
+   955→      <Dialog open={bulkReassignOpen} onOpenChange={(o) => { setBulkReassignOpen(o); if (!o) setReassignTargetId(""); }}>
+   956→        <DialogContent className="sm:max-w-md">
+   957→          <DialogHeader>
+   958→            <DialogTitle className="flex items-center gap-2">
+   959→              <Users className="h-5 w-5 text-primary" /> Reassign Selected Enquiries
+   960→            </DialogTitle>
+   961→            <DialogDescription>
+   962→              Move <strong>{selectedIds.size}</strong> selected {selectedIds.size === 1 ? "enquiry" : "enquiries"} to a different sales executive.
+   963→            </DialogDescription>
+   964→          </DialogHeader>
+   965→          <div className="space-y-3 py-2">
+   966→            <div className="space-y-1.5">
+   967→              <Label className="text-xs font-medium">Assign to *</Label>
+   968→              <Select value={reassignTargetId} onValueChange={setReassignTargetId}>
+   969→                <SelectTrigger className="h-9">
+   970→                  <SelectValue placeholder="Select a sales executive" />
+   971→                </SelectTrigger>
+   972→                <SelectContent className="max-h-60">
+   973→                  {reassignableUsers.map((u: any) => (
+   974→                    <SelectItem key={u.id} value={u.id}>
+   975→                      {u.name}
+   976→                      <span className="ml-1.5 text-xs text-muted-foreground">
+   977→                        ({u.role === "MANAGER" ? "Manager" : u.role.toLowerCase()})
+   978→                      </span>
+   979→                    </SelectItem>
+   980→                  ))}
+   981→                </SelectContent>
+   982→              </Select>
+   983→            </div>
+   984→            {reassignTargetUser && (
+   985→              <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+   986→                You are about to reassign{" "}
+   987→                <strong className="text-foreground">{selectedIds.size}</strong>{" "}
+   988→                {selectedIds.size === 1 ? "enquiry" : "enquiries"} to{" "}
+   989→                <strong className="text-foreground">{reassignTargetUser.name}</strong>.
+   990→              </div>
+   991→            )}
+   992→          </div>
+   993→          <DialogFooter>
+   994→            <Button variant="outline" onClick={() => setBulkReassignOpen(false)}>Cancel</Button>
+   995→            <Button
+   996→              disabled={!reassignTargetId || bulkReassignMut.isPending}
+   997→              onClick={() =>
+   998→                bulkReassignMut.mutate({
+   999→                  ids: [...selectedIds],
+  1000→                  assignedTo: reassignTargetId,
+  1001→                })
+  1002→              }
+  1003→            >
+  1004→              {bulkReassignMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+  1005→              Reassign {selectedIds.size} {selectedIds.size === 1 ? "enquiry" : "enquiries"}
+  1006→            </Button>
+  1007→          </DialogFooter>
+  1008→        </DialogContent>
+  1009→      </Dialog>
+  1010→    </div>
+  1011→  );
+  1012→}
+  1013→
+  1014→/* ============ Saved Views Bar ============ */
+  1015→function SavedViewsBar({
+  1016→  views, activeViewId, onApply, onDelete, onSetDefault, onSaveCurrent, onClear, hasActiveFilters,
+  1017→}: {
+  1018→  views: any[];
+  1019→  activeViewId: string | null;
+  1020→  onApply: (v: any) => void;
+  1021→  onDelete: (id: string) => void;
+  1022→  onSetDefault: (id: string, isDefault: boolean) => void;
+  1023→  onSaveCurrent: () => void;
+  1024→  onClear: () => void;
+  1025→  hasActiveFilters: boolean;
+  1026→}) {
+  1027→  return (
+  1028→    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+  1029→      <div className="flex flex-wrap items-center gap-1.5">
+  1030→        <span className="mr-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+  1031→          <Bookmark className="h-3.5 w-3.5" /> Views
+  1032→        </span>
+  1033→        {views.length === 0 ? (
+  1034→          <span className="text-xs text-muted-foreground italic">No saved views yet</span>
+  1035→        ) : (
+  1036→          views.map((v) => (
+  1037→            <div key={v.id} className="group relative">
+  1038→              <button
+  1039→                onClick={() => onApply(v)}
+  1040→                className={cn(
+  1041→                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition",
+  1042→                  v.id === activeViewId
+  1043→                    ? "border-primary bg-primary/10 text-primary"
+  1044→                    : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+  1045→                )}
+  1046→                title={v.isDefault ? "Default view" : `Apply "${v.name}"`}
+  1047→              >
+  1048→                {v.isDefault && <BookmarkCheck className="h-3 w-3 text-primary" />}
+  1049→                {v.name}
+  1050→              </button>
+  1051→              {/* Per-view actions dropdown on hover */}
+  1052→              <DropdownMenu>
+  1053→                <DropdownMenuTrigger asChild>
+  1054→                  <button
+  1055→                    className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border bg-background text-muted-foreground group-hover:flex hover:text-foreground"
+  1056→                    aria-label={`Options for ${v.name}`}
+  1057→                  >
+  1058→                    <ChevronDown className="h-3 w-3" />
+  1059→                  </button>
+  1060→                </DropdownMenuTrigger>
+  1061→                <DropdownMenuContent align="start" className="w-44">
+  1062→                  <DropdownMenuItem onClick={() => onApply(v)}>
+  1063→                    <Bookmark className="mr-2 h-3.5 w-3.5" /> Apply
+  1064→                  </DropdownMenuItem>
+  1065→                  <DropdownMenuItem onClick={() => onSetDefault(v.id, !v.isDefault)}>
+  1066→                    <BookmarkCheck className="mr-2 h-3.5 w-3.5" /> {v.isDefault ? "Unset default" : "Set as default"}
+  1067→                  </DropdownMenuItem>
+  1068→                  <DropdownMenuSeparator />
+  1069→                  <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => onDelete(v.id)}>
+  1070→                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+  1071→                  </DropdownMenuItem>
+  1072→                </DropdownMenuContent>
+  1073→              </DropdownMenu>
+  1074→            </div>
+  1075→          ))
+  1076→        )}
+  1077→      </div>
+  1078→      <div className="flex items-center gap-1.5">
+  1079→        <Button variant="outline" size="sm" onClick={onSaveCurrent} disabled={!hasActiveFilters && views.length > 0}>
+  1080→          <Save className="mr-1.5 h-3.5 w-3.5" /> Save View
+  1081→        </Button>
+  1082→        {hasActiveFilters && (
+  1083→          <Button variant="ghost" size="sm" onClick={onClear}>
+  1084→            <X className="mr-1.5 h-3.5 w-3.5" /> Clear
+  1085→          </Button>
+  1086→        )}
+  1087→      </div>
+  1088→    </div>
+  1089→  );
+  1090→}
+  1091→
+  1092→/* ============ Active Filter Chips Row ============ */
+  1093→function FilterChipsRow({
+  1094→  chips, onClear, onClearAll,
+  1095→}: {
+  1096→  chips: { key: keyof EnquiryFilters; label: string }[];
+  1097→  onClear: (key: keyof EnquiryFilters) => void;
+  1098→  onClearAll: () => void;
+  1099→}) {
+  1100→  if (chips.length === 0) return null;
+  1101→  return (
+  1102→    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/80 bg-muted/30 px-3 py-2.5">
+  1103→      <span className="mr-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+  1104→        <Filter className="h-3.5 w-3.5" /> Active
+  1105→      </span>
+  1106→      {chips.map((c) => (
+  1107→        <span
+  1108→          key={c.key}
+  1109→          className="group inline-flex animate-in fade-in zoom-in-95 duration-200 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary transition hover:bg-primary/15"
+  1110→        >
+  1111→          {c.label}
+  1112→          <button
+  1113→            type="button"
+  1114→            onClick={() => onClear(c.key)}
+  1115→            aria-label={`Clear filter ${c.label}`}
+  1116→            className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-primary/70 transition hover:bg-primary/20 hover:text-red-500"
+  1117→          >
+  1118→            <X className="h-3 w-3" />
+  1119→          </button>
+  1120→        </span>
+  1121→      ))}
+  1122→      <button
+  1123→        type="button"
+  1124→        onClick={onClearAll}
+  1125→        className="ml-1 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition hover:text-red-500"
+  1126→      >
+  1127→        <Trash2 className="h-3 w-3" /> Clear all
+  1128→      </button>
+  1129→    </div>
+  1130→  );
+  1131→}
+  1132→
+  1133→/* ============ Advanced Filters Popover ============ */
+  1134→function AdvancedFiltersButton({
+  1135→  count, source, setSource, productId, setProductId, assignedTo, setAssignedTo,
+  1136→  stateFilter, setStateFilter, dateFrom, setDateFrom, dateTo, setDateTo,
+  1137→  minBudget, setMinBudget, maxBudget, setMaxBudget,
+  1138→  minLeadScore, setMinLeadScore, maxLeadScore, setMaxLeadScore,
+  1139→  onClearAll, products, users, role,
+  1140→}: {
+  1141→  count: number;
+  1142→  source: string; setSource: (v: string) => void;
+  1143→  productId: string; setProductId: (v: string) => void;
+  1144→  assignedTo: string; setAssignedTo: (v: string) => void;
+  1145→  stateFilter: string; setStateFilter: (v: string) => void;
+  1146→  dateFrom: string; setDateFrom: (v: string) => void;
+  1147→  dateTo: string; setDateTo: (v: string) => void;
+  1148→  minBudget: string; setMinBudget: (v: string) => void;
+  1149→  maxBudget: string; setMaxBudget: (v: string) => void;
+  1150→  minLeadScore: string; setMinLeadScore: (v: string) => void;
+  1151→  maxLeadScore: string; setMaxLeadScore: (v: string) => void;
+  1152→  onClearAll: () => void;
+  1153→  products: any[];
+  1154→  users: any[];
+  1155→  role: string;
+  1156→}) {
+  1157→  const [open, setOpen] = useState(false);
+  1158→  const execs = users.filter((u) => u.role === "EXECUTIVE" && u.active);
+  1159→
+  1160→  return (
+  1161→    <Popover open={open} onOpenChange={setOpen}>
+  1162→      <PopoverTrigger asChild>
+  1163→        <Button
+  1164→          variant="outline"
+  1165→          size="sm"
+  1166→          className={cn("relative", count > 0 && "border-primary/40 bg-primary/5 text-primary")}
+  1167→          aria-label="Advanced filters"
+  1168→        >
+  1169→          <SlidersHorizontal className="mr-1.5 h-4 w-4" />
+  1170→          Filters
+  1171→          {count > 0 && (
+  1172→            <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold leading-none text-primary-foreground">
+  1173→              {count}
+  1174→            </span>
+  1175→          )}
+  1176→        </Button>
+  1177→      </PopoverTrigger>
+  1178→      <PopoverContent
+  1179→        align="end"
+  1180→        sideOffset={6}
+  1181→        className="w-[calc(100vw-2rem)] max-w-[34rem] p-4 sm:w-[34rem]"
+  1182→      >
+  1183→        <div className="mb-3 flex items-center justify-between">
+  1184→          <div className="flex items-center gap-2">
+  1185→            <SlidersHorizontal className="h-4 w-4 text-primary" />
+  1186→            <p className="text-sm font-semibold text-foreground">Advanced Filters</p>
+  1187→          </div>
+  1188→          <button
+  1189→            type="button"
+  1190→            onClick={onClearAll}
+  1191→            className="text-xs font-medium text-muted-foreground transition hover:text-red-500"
+  1192→          >
+  1193→            Clear all
+  1194→          </button>
+  1195→        </div>
+  1196→
+  1197→        <div className="grid max-h-[60vh] grid-cols-1 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+  1198→          {/* Source */}
+  1199→          <div className="space-y-1.5">
+  1200→            <Label className="text-xs font-medium">Source</Label>
+  1201→            <Select value={source || "all"} onValueChange={(v) => setSource(v === "all" ? "" : v)}>
+  1202→              <SelectTrigger className="h-9"><SelectValue placeholder="Any source" /></SelectTrigger>
+  1203→              <SelectContent>
+  1204→                <SelectItem value="all">Any source</SelectItem>
+  1205→                {SOURCES.map((s) => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}
+  1206→              </SelectContent>
+  1207→            </Select>
+  1208→          </div>
+  1209→
+  1210→          {/* Product */}
+  1211→          <div className="space-y-1.5">
+  1212→            <Label className="text-xs font-medium">Product</Label>
+  1213→            <Select value={productId || "all"} onValueChange={(v) => setProductId(v === "all" ? "" : v)}>
+  1214→              <SelectTrigger className="h-9"><SelectValue placeholder="Any product" /></SelectTrigger>
+  1215→              <SelectContent className="max-h-60">
+  1216→                <SelectItem value="all">Any product</SelectItem>
+  1217→                {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+  1218→              </SelectContent>
+  1219→            </Select>
+  1220→          </div>
+  1221→
+  1222→          {/* Executive (hidden for EXECUTIVE role — they can only see their own) */}
+  1223→          {role !== "EXECUTIVE" && (
+  1224→            <div className="space-y-1.5">
+  1225→              <Label className="text-xs font-medium">Assigned Executive</Label>
+  1226→              <Select value={assignedTo || "all"} onValueChange={(v) => setAssignedTo(v === "all" ? "" : v)}>
+  1227→                <SelectTrigger className="h-9"><SelectValue placeholder="Any executive" /></SelectTrigger>
+  1228→                <SelectContent className="max-h-60">
+  1229→                  <SelectItem value="all">Any executive</SelectItem>
+  1230→                  {execs.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+  1231→                  {users.filter((u) => u.role === "MANAGER").map((u) => <SelectItem key={u.id} value={u.id}>{u.name} (Manager)</SelectItem>)}
+  1232→                </SelectContent>
+  1233→              </Select>
+  1234→            </div>
+  1235→          )}
+  1236→
+  1237→          {/* State */}
+  1238→          <div className="space-y-1.5">
+  1239→            <Label className="text-xs font-medium">State</Label>
+  1240→            <Select value={stateFilter || "all"} onValueChange={(v) => setStateFilter(v === "all" ? "" : v)}>
+  1241→              <SelectTrigger className="h-9"><SelectValue placeholder="Any state" /></SelectTrigger>
+  1242→              <SelectContent className="max-h-60">
+  1243→                <SelectItem value="all">Any state</SelectItem>
+  1244→                {INDIAN_STATES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+  1245→              </SelectContent>
+  1246→            </Select>
+  1247→          </div>
+  1248→
+  1249→          {/* Date range */}
+  1250→          <div className="space-y-1.5">
+  1251→            <Label className="text-xs font-medium">Date From</Label>
+  1252→            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9" />
+  1253→          </div>
+  1254→          <div className="space-y-1.5">
+  1255→            <Label className="text-xs font-medium">Date To</Label>
+  1256→            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9" />
+  1257→          </div>
+  1258→
+  1259→          {/* Budget range */}
+  1260→          <div className="space-y-1.5">
+  1261→            <Label className="text-xs font-medium">Min Budget (₹)</Label>
+  1262→            <Input type="number" min={0} value={minBudget} onChange={(e) => setMinBudget(e.target.value)} placeholder="e.g. 50000" className="h-9" />
+  1263→          </div>
+  1264→          <div className="space-y-1.5">
+  1265→            <Label className="text-xs font-medium">Max Budget (₹)</Label>
+  1266→            <Input type="number" min={0} value={maxBudget} onChange={(e) => setMaxBudget(e.target.value)} placeholder="e.g. 5000000" className="h-9" />
+  1267→          </div>
+  1268→
+  1269→          {/* Lead score range */}
+  1270→          <div className="space-y-1.5">
+  1271→            <Label className="text-xs font-medium">Min Lead Score (0–100)</Label>
+  1272→            <Input type="number" min={0} max={100} value={minLeadScore} onChange={(e) => setMinLeadScore(e.target.value)} placeholder="e.g. 70" className="h-9" />
+  1273→          </div>
+  1274→          <div className="space-y-1.5">
+  1275→            <Label className="text-xs font-medium">Max Lead Score (0–100)</Label>
+  1276→            <Input type="number" min={0} max={100} value={maxLeadScore} onChange={(e) => setMaxLeadScore(e.target.value)} placeholder="e.g. 100" className="h-9" />
+  1277→          </div>
+  1278→        </div>
+  1279→
+  1280→        <div className="mt-4 flex items-center justify-between gap-2">
+  1281→          <p className="text-xs text-muted-foreground">
+  1282→            {count > 0 ? `${count} filter${count === 1 ? "" : "s"} active` : "No advanced filters applied"}
+  1283→          </p>
+  1284→          <div className="flex items-center gap-2">
+  1285→            <Button variant="ghost" size="sm" onClick={onClearAll} disabled={count === 0}>
+  1286→              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Reset
+  1287→            </Button>
+  1288→            <Button size="sm" onClick={() => setOpen(false)}>
+  1289→              <CheckSquare className="mr-1.5 h-3.5 w-3.5" /> Done
+  1290→            </Button>
+  1291→          </div>
+  1292→        </div>
+  1293→      </PopoverContent>
+  1294→    </Popover>
+  1295→  );
+  1296→}
+  1297→
+  1298→/* ============ Save View Form ============ */
+  1299→function SaveViewForm({
+  1300→  chips, isDefault, onSave, loading,
+  1301→}: {
+  1302→  chips: { key: keyof EnquiryFilters; label: string }[];
+  1303→  isDefault: boolean;
+  1304→  onSave: (name: string, isDefault: boolean) => void;
+  1305→  loading: boolean;
+  1306→}) {
+  1307→  const [name, setName] = useState("");
+  1308→  const [makeDefault, setMakeDefault] = useState(isDefault);
+  1309→
+  1310→  return (
+  1311→    <div className="space-y-3 py-2">
+  1312→      <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+  1313→        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Current filters</p>
+  1314→        {chips.length === 0 ? (
+  1315→          <p className="mt-0.5 text-sm text-foreground">All enquiries (no filters)</p>
+  1316→        ) : (
+  1317→          <div className="mt-2 flex flex-wrap gap-1.5">
+  1318→            {chips.map((c) => (
+  1319→              <span
+  1320→                key={c.key}
+  1321→                className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+  1322→              >
+  1323→                {c.label}
+  1324→              </span>
+  1325→            ))}
+  1326→          </div>
+  1327→        )}
+  1328→      </div>
+  1329→      <div className="space-y-1.5">
+  1330→        <Label>View name *</Label>
+  1331→        <Input
+  1332→          value={name}
+  1333→          onChange={(e) => setName(e.target.value)}
+  1334→          placeholder="e.g. Hot Leads This Month"
+  1335→          autoFocus
+  1336→        />
+  1337→      </div>
+  1338→      <div className="flex items-center gap-2">
+  1339→        <Checkbox
+  1340→          id="make-default"
+  1341→          checked={makeDefault}
+  1342→          onCheckedChange={(v) => setMakeDefault(v === true)}
+  1343→        />
+  1344→        <Label htmlFor="make-default" className="cursor-pointer text-sm font-normal">
+  1345→          Set as default view (auto-applies on page load)
+  1346→        </Label>
+  1347→      </div>
+  1348→      <DialogFooter>
+  1349→        <Button
+  1350→          onClick={() => onSave(name.trim(), makeDefault)}
+  1351→          disabled={!name.trim() || loading}
+  1352→        >
+  1353→          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save View
+  1354→        </Button>
+  1355→      </DialogFooter>
+  1356→    </div>
+  1357→  );
+  1358→}
+  1359→
+  1360→/* ============ Create Enquiry Dialog ============ */
+  1361→function CreateEnquiryDialog({
+  1362→  open, onOpenChange, products, users, role, currentUserId, onCreated,
+  1363→}: {
+  1364→  open: boolean;
+  1365→  onOpenChange: (o: boolean) => void;
+  1366→  products: any[];
+  1367→  users: any[];
+  1368→  role: string;
+  1369→  currentUserId?: string;
+  1370→  onCreated: (id: string) => void;
+  1371→}) {
+  1372→  const qc = useQueryClient();
+  1373→  const [form, setForm] = useState<any>({
+  1374→    source: "WEBSITE", company: "", contactPerson: "", mobile: "", email: "",
+  1375→    productInterested: "", productId: "", budget: "", city: "", state: "",
+  1376→    specification: "", remarks: "", assignedTo: currentUserId || "", nextFollowUpDate: "",
+  1377→  });
+  1378→  const [dupWarn, setDupWarn] = useState(false);
+  1379→
+  1380→  const execs = users.filter((u) => u.role === "EXECUTIVE" && u.active);
+  1381→  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  1382→
+  1383→  const mutation = useMutation({
+  1384→    mutationFn: (payload: any) => api<any>("/api/enquiries", { method: "POST", body: JSON.stringify(payload) }),
+  1385→    onSuccess: (data) => {
+  1386→      toast.success(`Enquiry ${data.enquiry.enquiryNumber} created`);
+  1387→      if (data.duplicate) toast.warning("⚠️ Possible duplicate detected — this customer may already exist.");
+  1388→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+  1389→      qc.invalidateQueries({ queryKey: ["dashboard"] });
+  1390→      onCreated(data.enquiry.id);
+  1391→      setForm({ source: "WEBSITE", company: "", contactPerson: "", mobile: "", email: "", productInterested: "", productId: "", budget: "", city: "", state: "", specification: "", remarks: "", assignedTo: currentUserId || "", nextFollowUpDate: "" });
+  1392→    },
+  1393→    onError: (e: any) => toast.error(e.message || "Failed to create enquiry"),
+  1394→  });
+  1395→
+  1396→  const submit = () => {
+  1397→    if (!form.company || !form.contactPerson || !form.mobile || !form.productInterested) {
+  1398→      toast.error("Please fill all mandatory fields (Company, Contact, Mobile, Product).");
+  1399→      return;
+  1400→    }
+  1401→    mutation.mutate(form);
+  1402→  };
+  1403→
+  1404→  return (
+  1405→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1406→      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+  1407→        <DialogHeader>
+  1408→          <DialogTitle className="flex items-center gap-2"><Plus className="h-5 w-5 text-primary" /> New Enquiry</DialogTitle>
+  1409→          <DialogDescription>Capture a new customer enquiry. Fields marked * are mandatory.</DialogDescription>
+  1410→        </DialogHeader>
+  1411→
+  1412→        <div className="grid gap-4 py-2 sm:grid-cols-2">
+  1413→          <div className="space-y-1.5">
+  1414→            <Label>Source *</Label>
+  1415→            <Select value={form.source} onValueChange={(v) => set("source", v)}>
+  1416→              <SelectTrigger><SelectValue /></SelectTrigger>
+  1417→              <SelectContent>{SOURCES.map((s) => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}</SelectContent>
+  1418→            </Select>
+  1419→          </div>
+  1420→          <div className="space-y-1.5">
+  1421→            <Label>Product Interested *</Label>
+  1422→            <Select value={form.productId} onValueChange={(v) => { const p = products.find((x) => x.id === v); set("productId", v); set("productInterested", p?.name || ""); }}>
+  1423→              <SelectTrigger><SelectValue placeholder="Select product" /></SelectTrigger>
+  1424→              <SelectContent className="max-h-60">
+  1425→                {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+  1426→              </SelectContent>
+  1427→            </Select>
+  1428→          </div>
+  1429→          <div className="space-y-1.5 sm:col-span-2">
+  1430→            <Label>Company Name *</Label>
+  1431→            <Input value={form.company} onChange={(e) => set("company", e.target.value)} placeholder="e.g. Tata Steel Ltd." />
+  1432→          </div>
+  1433→          <div className="space-y-1.5">
+  1434→            <Label>Contact Person *</Label>
+  1435→            <Input value={form.contactPerson} onChange={(e) => set("contactPerson", e.target.value)} placeholder="e.g. Rajesh Kumar" />
+  1436→          </div>
+  1437→          <div className="space-y-1.5">
+  1438→            <Label>Mobile Number *</Label>
+  1439→            <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="10-digit mobile" maxLength={15} />
+  1440→          </div>
+  1441→          <div className="space-y-1.5">
+  1442→            <Label>Email</Label>
+  1443→            <Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="contact@company.com" />
+  1444→          </div>
+  1445→          <div className="space-y-1.5">
+  1446→            <Label>Budget (₹)</Label>
+  1447→            <Input type="number" value={form.budget} onChange={(e) => set("budget", e.target.value)} placeholder="e.g. 500000" />
+  1448→          </div>
+  1449→          <div className="space-y-1.5">
+  1450→            <Label>City</Label>
+  1451→            <Input value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="e.g. Pune" />
+  1452→          </div>
+  1453→          <div className="space-y-1.5">
+  1454→            <Label>State</Label>
+  1455→            <Input value={form.state} onChange={(e) => set("state", e.target.value)} placeholder="e.g. Maharashtra" />
+  1456→          </div>
+  1457→          <div className="space-y-1.5">
+  1458→            <Label>Assigned Executive</Label>
+  1459→            <Select value={form.assignedTo} onValueChange={(v) => set("assignedTo", v)}>
+  1460→              <SelectTrigger><SelectValue placeholder="Assign to…" /></SelectTrigger>
+  1461→              <SelectContent>
+  1462→                {execs.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+  1463→                {role !== "EXECUTIVE" && users.filter((u) => u.role === "MANAGER").map((u) => <SelectItem key={u.id} value={u.id}>{u.name} (Manager)</SelectItem>)}
+  1464→              </SelectContent>
+  1465→            </Select>
+  1466→          </div>
+  1467→          <div className="space-y-1.5">
+  1468→            <Label>Next Follow-Up Date</Label>
+  1469→            <Input type="date" value={form.nextFollowUpDate} onChange={(e) => set("nextFollowUpDate", e.target.value)} />
+  1470→          </div>
+  1471→          <div className="space-y-1.5 sm:col-span-2">
+  1472→            <Label>Specification / Requirements</Label>
+  1473→            <Textarea value={form.specification} onChange={(e) => set("specification", e.target.value)} placeholder="Technical specs, quantity, special requirements…" rows={2} />
+  1474→          </div>
+  1475→          <div className="space-y-1.5 sm:col-span-2">
+  1476→            <Label>Remarks</Label>
+  1477→            <Textarea value={form.remarks} onChange={(e) => set("remarks", e.target.value)} placeholder="Any additional notes…" rows={2} />
+  1478→          </div>
+  1479→        </div>
+  1480→
+  1481→        {dupWarn && (
+  1482→          <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+  1483→            <AlertTriangle className="h-4 w-4" /> This customer may already exist. Please verify before saving.
+  1484→          </div>
+  1485→        )}
+  1486→
+  1487→        <DialogFooter>
+  1488→          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+  1489→          <Button onClick={submit} disabled={mutation.isPending}>
+  1490→            {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Create Enquiry
+  1491→          </Button>
+  1492→        </DialogFooter>
+  1493→      </DialogContent>
+  1494→    </Dialog>
+  1495→  );
+  1496→}
+  1497→

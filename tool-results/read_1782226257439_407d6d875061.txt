@@ -1,0 +1,916 @@
+     1→"use client";
+     2→
+     3→// MSIH CRM V1.0 — Reminder Queue
+     4→// Schedule and track WhatsApp, SMS, and Email reminders to customers.
+     5→// Statuses: QUEUED → SENT | FAILED | CANCELLED. Retries supported on FAILED.
+     6→// All authenticated roles may create; EXECUTIVE sees only their own reminders.
+     7→// Developer: Manoj Dore — MIT License
+     8→
+     9→import { useState, useMemo } from "react";
+    10→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+    11→import { api, fmtDateTime } from "@/lib/api-client";
+    12→import { useSession } from "next-auth/react";
+    13→import { KpiCard, PageHeader, EmptyState, Loading } from "../shared";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Input } from "@/components/ui/input";
+    16→import { Label } from "@/components/ui/label";
+    17→import { Textarea } from "@/components/ui/textarea";
+    18→import { Card } from "@/components/ui/card";
+    19→import { Badge } from "@/components/ui/badge";
+    20→import {
+    21→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    22→} from "@/components/ui/select";
+    23→import {
+    24→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+    25→} from "@/components/ui/dialog";
+    26→import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    27→import { toast } from "sonner";
+    28→import {
+    29→  BellRing, Plus, Search, Send, CheckCircle2, AlertTriangle, XCircle,
+    30→  Clock, MessageCircle, Mail, Smartphone, RefreshCw, Trash2, User,
+    31→  Building2, Loader2, FileText,
+    32→} from "lucide-react";
+    33→import { cn } from "@/lib/utils";
+    34→
+    35→type Channel = "WHATSAPP" | "SMS" | "EMAIL";
+    36→type Status = "QUEUED" | "SENT" | "FAILED" | "CANCELLED";
+    37→
+    38→const STATUS_TABS: { key: string; label: string; dot: string }[] = [
+    39→  { key: "all", label: "All", dot: "bg-slate-400" },
+    40→  { key: "QUEUED", label: "Queued", dot: "bg-sky-500" },
+    41→  { key: "SENT", label: "Sent", dot: "bg-emerald-500" },
+    42→  { key: "FAILED", label: "Failed", dot: "bg-red-500" },
+    43→  { key: "CANCELLED", label: "Cancelled", dot: "bg-slate-500" },
+    44→];
+    45→
+    46→const CHANNELS: Channel[] = ["WHATSAPP", "SMS", "EMAIL"];
+    47→
+    48→const channelMeta: Record<
+    49→  Channel,
+    50→  { icon: typeof MessageCircle; label: string; color: string; ring: string; chip: string }
+    51→> = {
+    52→  WHATSAPP: {
+    53→    icon: MessageCircle,
+    54→    label: "WhatsApp",
+    55→    color: "text-emerald-600 dark:text-emerald-400",
+    56→    ring: "ring-emerald-500/20 bg-emerald-500/10",
+    57→    chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+    58→  },
+    59→  SMS: {
+    60→    icon: Smartphone,
+    61→    label: "SMS",
+    62→    color: "text-sky-600 dark:text-sky-400",
+    63→    ring: "ring-sky-500/20 bg-sky-500/10",
+    64→    chip: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+    65→  },
+    66→  EMAIL: {
+    67→    icon: Mail,
+    68→    label: "Email",
+    69→    color: "text-violet-600 dark:text-violet-400",
+    70→    ring: "ring-violet-500/20 bg-violet-500/10",
+    71→    chip: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+    72→  },
+    73→};
+    74→
+    75→const statusBadge: Record<Status, string> = {
+    76→  QUEUED: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+    77→  SENT: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+    78→  FAILED: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+    79→  CANCELLED: "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
+    80→};
+    81→
+    82→function isOverdue(r: any): boolean {
+    83→  return r.status === "QUEUED" && new Date(r.scheduledAt) < new Date();
+    84→}
+    85→
+    86→function isSentToday(r: any): boolean {
+    87→  if (r.status !== "SENT" || !r.sentAt) return false;
+    88→  const sent = new Date(r.sentAt);
+    89→  const now = new Date();
+    90→  return (
+    91→    sent.getFullYear() === now.getFullYear() &&
+    92→    sent.getMonth() === now.getMonth() &&
+    93→    sent.getDate() === now.getDate()
+    94→  );
+    95→}
+    96→
+    97→export function RemindersView() {
+    98→  const { data: session } = useSession();
+    99→  const me = session?.user as any;
+   100→  const role = me?.role || "EXECUTIVE";
+   101→  const isAdmin = role === "ADMIN" || role === "SUPER_ADMIN";
+   102→  const qc = useQueryClient();
+   103→
+   104→  const [statusTab, setStatusTab] = useState("all");
+   105→  const [channelFilter, setChannelFilter] = useState<"all" | Channel>("all");
+   106→  const [search, setSearch] = useState("");
+   107→  const [createOpen, setCreateOpen] = useState(false);
+   108→  const [failTarget, setFailTarget] = useState<any | null>(null);
+   109→  const [retryTarget, setRetryTarget] = useState<any | null>(null);
+   110→  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+   111→
+   112→  const { data, isLoading } = useQuery({
+   113→    queryKey: ["reminders"],
+   114→    queryFn: () => api<any>("/api/reminders?limit=500"),
+   115→  });
+   116→
+   117→  // Optional relation lists for the create form
+   118→  const { data: enquiriesData } = useQuery({
+   119→    queryKey: ["enquiries-reminder-link"],
+   120→    queryFn: () => api<any>("/api/enquiries?limit=200"),
+   121→  });
+   122→  const { data: customersData } = useQuery({
+   123→    queryKey: ["customers-reminder-link"],
+   124→    queryFn: () => api<any>("/api/customers?limit=200"),
+   125→  });
+   126→
+   127→  const reminders = data?.reminders || [];
+   128→
+   129→  // KPIs (computed from the full, unfiltered list)
+   130→  const queued = reminders.filter((r: any) => r.status === "QUEUED").length;
+   131→  const sentToday = reminders.filter(isSentToday).length;
+   132→  const failed = reminders.filter((r: any) => r.status === "FAILED").length;
+   133→  const overdue = reminders.filter(isOverdue).length;
+   134→
+   135→  // Status tab counts
+   136→  const statusCounts: Record<string, number> = {
+   137→    all: reminders.length,
+   138→    QUEUED: queued,
+   139→    SENT: reminders.filter((r: any) => r.status === "SENT").length,
+   140→    FAILED: failed,
+   141→    CANCELLED: reminders.filter((r: any) => r.status === "CANCELLED").length,
+   142→  };
+   143→
+   144→  // Apply status + channel + search filters client-side
+   145→  const filtered = useMemo(() => {
+   146→    let list = reminders;
+   147→    if (statusTab !== "all") list = list.filter((r: any) => r.status === statusTab);
+   148→    if (channelFilter !== "all") list = list.filter((r: any) => r.channel === channelFilter);
+   149→    if (search.trim()) {
+   150→      const q = search.toLowerCase();
+   151→      list = list.filter(
+   152→        (r: any) =>
+   153→          r.recipient?.toLowerCase().includes(q) ||
+   154→          r.recipientName?.toLowerCase().includes(q) ||
+   155→          r.message?.toLowerCase().includes(q)
+   156→      );
+   157→    }
+   158→    return list;
+   159→  }, [reminders, statusTab, channelFilter, search]);
+   160→
+   161→  const createMut = useMutation({
+   162→    mutationFn: (body: any) =>
+   163→      api("/api/reminders", { method: "POST", body: JSON.stringify(body) }),
+   164→    onSuccess: () => {
+   165→      toast.success("Reminder queued");
+   166→      qc.invalidateQueries({ queryKey: ["reminders"] });
+   167→      setCreateOpen(false);
+   168→    },
+   169→    onError: (e: any) => toast.error(e.message || "Failed to queue reminder"),
+   170→  });
+   171→
+   172→  const patchMut = useMutation({
+   173→    mutationFn: ({ id, body }: { id: string; body: any }) =>
+   174→      api(`/api/reminders/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+   175→    onSuccess: (_d, vars) => {
+   176→      const action =
+   177→        vars.body.status === "SENT"
+   178→          ? "Reminder marked as sent"
+   179→          : vars.body.status === "FAILED"
+   180→          ? "Reminder marked as failed"
+   181→          : vars.body.status === "CANCELLED"
+   182→          ? "Reminder cancelled"
+   183→          : vars.body.status === "QUEUED"
+   184→          ? "Reminder retried — back in queue"
+   185→          : "Reminder updated";
+   186→      toast.success(action);
+   187→      qc.invalidateQueries({ queryKey: ["reminders"] });
+   188→      setFailTarget(null);
+   189→      setRetryTarget(null);
+   190→    },
+   191→    onError: (e: any) => toast.error(e.message || "Failed to update reminder"),
+   192→  });
+   193→
+   194→  const deleteMut = useMutation({
+   195→    mutationFn: (id: string) => api(`/api/reminders/${id}`, { method: "DELETE" }),
+   196→    onSuccess: () => {
+   197→      toast.success("Reminder deleted");
+   198→      qc.invalidateQueries({ queryKey: ["reminders"] });
+   199→      setDeleteTarget(null);
+   200→    },
+   201→    onError: (e: any) => toast.error(e.message || "Failed to delete reminder"),
+   202→  });
+   203→
+   204→  return (
+   205→    <div className="space-y-5">
+   206→      <PageHeader
+   207→        title="Reminder Queue"
+   208→        description="Schedule and track WhatsApp, SMS, and Email reminders to customers."
+   209→        icon={BellRing}
+   210→        actions={
+   211→          <Button onClick={() => setCreateOpen(true)}>
+   212→            <Plus className="mr-2 h-4 w-4" /> New Reminder
+   213→          </Button>
+   214→        }
+   215→      />
+   216→
+   217→      {/* KPI Row */}
+   218→      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+   219→        <KpiCard label="QUEUED" value={queued} icon={Clock} hint="Waiting to send" accent="blue" />
+   220→        <KpiCard label="SENT TODAY" value={sentToday} icon={CheckCircle2} hint="Delivered today" accent="emerald" />
+   221→        <KpiCard label="FAILED" value={failed} icon={AlertTriangle} hint="Need attention" accent="red" />
+   222→        <KpiCard label="OVERDUE" value={overdue} icon={BellRing} hint="Queued & past scheduled time" accent="amber" />
+   223→      </div>
+   224→
+   225→      {/* Filters */}
+   226→      <Card className="p-4">
+   227→        <div className="flex flex-col gap-3">
+   228→          {/* Status tabs with counts */}
+   229→          <Tabs value={statusTab} onValueChange={setStatusTab}>
+   230→            <TabsList className="flex h-auto flex-wrap gap-1 bg-muted/60">
+   231→              {STATUS_TABS.map((t) => (
+   232→                <TabsTrigger key={t.key} value={t.key} className="text-xs">
+   233→                  <span className={cn("inline-block h-1.5 w-1.5 rounded-full", t.dot)} />
+   234→                  {t.label}
+   235→                  <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
+   236→                    {statusCounts[t.key] || 0}
+   237→                  </Badge>
+   238→                </TabsTrigger>
+   239→              ))}
+   240→            </TabsList>
+   241→          </Tabs>
+   242→
+   243→          {/* Channel pills + search */}
+   244→          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+   245→            <div className="flex flex-wrap items-center gap-1.5">
+   246→              <span className="text-xs font-medium text-muted-foreground mr-1">Channel:</span>
+   247→              <button
+   248→                onClick={() => setChannelFilter("all")}
+   249→                className={cn(
+   250→                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+   251→                  channelFilter === "all"
+   252→                    ? "bg-foreground text-background"
+   253→                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+   254→                )}
+   255→              >
+   256→                All
+   257→              </button>
+   258→              {CHANNELS.map((c) => {
+   259→                const meta = channelMeta[c];
+   260→                const Icon = meta.icon;
+   261→                const active = channelFilter === c;
+   262→                return (
+   263→                  <button
+   264→                    key={c}
+   265→                    onClick={() => setChannelFilter(c)}
+   266→                    className={cn(
+   267→                      "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-colors",
+   268→                      active
+   269→                        ? "bg-foreground text-background"
+   270→                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+   271→                    )}
+   272→                  >
+   273→                    <Icon className="h-3 w-3" />
+   274→                    {meta.label}
+   275→                  </button>
+   276→                );
+   277→              })}
+   278→            </div>
+   279→            <div className="relative w-full lg:w-72">
+   280→              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   281→              <Input
+   282→                placeholder="Search recipient, name, or message…"
+   283→                value={search}
+   284→                onChange={(e) => setSearch(e.target.value)}
+   285→                className="pl-9"
+   286→              />
+   287→            </div>
+   288→          </div>
+   289→        </div>
+   290→      </Card>
+   291→
+   292→      {/* Reminder grid */}
+   293→      {isLoading ? (
+   294→        <Loading label="Loading reminders…" />
+   295→      ) : filtered.length === 0 ? (
+   296→        <EmptyState
+   297→          icon={BellRing}
+   298→          title="No reminders found"
+   299→          description={
+   300→            reminders.length === 0
+   301→              ? "Queue your first customer follow-up reminder — WhatsApp, SMS, or Email."
+   302→              : "No reminders match the current filters."
+   303→          }
+   304→          action={
+   305→            <Button onClick={() => setCreateOpen(true)}>
+   306→              <Plus className="mr-2 h-4 w-4" /> New Reminder
+   307→            </Button>
+   308→          }
+   309→        />
+   310→      ) : (
+   311→        <div className="grid gap-4 md:grid-cols-2">
+   312→          {filtered.map((r: any) => (
+   313→            <ReminderCard
+   314→              key={r.id}
+   315→              reminder={r}
+   316→              meId={me?.id}
+   317→              isAdmin={isAdmin}
+   318→              onMarkSent={() => patchMut.mutate({ id: r.id, body: { status: "SENT" } })}
+   319→              onMarkFailed={() => setFailTarget(r)}
+   320→              onRetry={() => setRetryTarget(r)}
+   321→              onCancel={() => patchMut.mutate({ id: r.id, body: { status: "CANCELLED" } })}
+   322→              onDelete={() => setDeleteTarget(r)}
+   323→              updating={patchMut.isPending}
+   324→            />
+   325→          ))}
+   326→        </div>
+   327→      )}
+   328→
+   329→      {/* Create Dialog */}
+   330→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   331→        <DialogContent className="sm:max-w-2xl">
+   332→          <DialogHeader>
+   333→            <DialogTitle>New Reminder</DialogTitle>
+   334→            <DialogDescription>
+   335→              Queue a WhatsApp, SMS, or Email reminder. The CRM does not auto-send — use the action buttons to mark delivery status.
+   336→            </DialogDescription>
+   337→          </DialogHeader>
+   338→          <CreateReminderForm
+   339→            enquiries={enquiriesData?.enquiries || []}
+   340→            customers={customersData?.customers || []}
+   341→            onSubmit={(v) => createMut.mutate(v)}
+   342→            loading={createMut.isPending}
+   343→          />
+   344→        </DialogContent>
+   345→      </Dialog>
+   346→
+   347→      {/* Mark Failed Dialog */}
+   348→      <Dialog open={!!failTarget} onOpenChange={(o) => !o && setFailTarget(null)}>
+   349→        <DialogContent className="sm:max-w-md">
+   350→          <DialogHeader>
+   351→            <DialogTitle>Mark Reminder as Failed</DialogTitle>
+   352→            <DialogDescription>
+   353→              Record why this reminder could not be delivered. The attempt count will be incremented.
+   354→            </DialogDescription>
+   355→          </DialogHeader>
+   356→          <MarkFailedForm
+   357→            recipient={failTarget?.recipient}
+   358→            defaultValue={failTarget?.errorMessage || ""}
+   359→            loading={patchMut.isPending}
+   360→            onSubmit={(errMsg) =>
+   361→              patchMut.mutate({
+   362→                id: failTarget.id,
+   363→                body: { status: "FAILED", errorMessage: errMsg },
+   364→              })
+   365→            }
+   366→          />
+   367→        </DialogContent>
+   368→      </Dialog>
+   369→
+   370→      {/* Retry Dialog */}
+   371→      <Dialog open={!!retryTarget} onOpenChange={(o) => !o && setRetryTarget(null)}>
+   372→        <DialogContent className="sm:max-w-md">
+   373→          <DialogHeader>
+   374→            <DialogTitle>Retry Reminder</DialogTitle>
+   375→            <DialogDescription>
+   376→              Reset this failed reminder back into the queue. The error message will be cleared; the attempt count is retained for audit.
+   377→            </DialogDescription>
+   378→          </DialogHeader>
+   379→          {retryTarget && (
+   380→            <div className="space-y-3">
+   381→              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+   382→                <div className="flex items-center gap-2 font-medium text-foreground">
+   383→                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold", channelMeta[retryTarget.channel as Channel]?.chip)}>
+   384→                    {channelMeta[retryTarget.channel as Channel]?.label}
+   385→                  </span>
+   386→                  {retryTarget.recipientName || retryTarget.recipient}
+   387→                </div>
+   388→                <p className="mt-2 text-xs text-muted-foreground line-clamp-3">{retryTarget.message}</p>
+   389→                {retryTarget.errorMessage && (
+   390→                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+   391→                    Previous error: {retryTarget.errorMessage}
+   392→                  </p>
+   393→                )}
+   394→                <p className="mt-2 text-[11px] text-muted-foreground">
+   395→                  Attempts so far: {retryTarget.attemptCount || 0}
+   396→                </p>
+   397→              </div>
+   398→              <DialogFooter>
+   399→                <Button variant="outline" onClick={() => setRetryTarget(null)}>
+   400→                  Cancel
+   401→                </Button>
+   402→                <Button
+   403→                  onClick={() =>
+   404→                    patchMut.mutate({
+   405→                      id: retryTarget.id,
+   406→                      body: { status: "QUEUED" },
+   407→                    })
+   408→                  }
+   409→                  disabled={patchMut.isPending}
+   410→                >
+   411→                  {patchMut.isPending ? (
+   412→                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+   413→                  ) : (
+   414→                    <RefreshCw className="mr-2 h-4 w-4" />
+   415→                  )}
+   416→                  Retry Now
+   417→                </Button>
+   418→              </DialogFooter>
+   419→            </div>
+   420→          )}
+   421→        </DialogContent>
+   422→      </Dialog>
+   423→
+   424→      {/* Delete Confirmation (ADMIN+ only) */}
+   425→      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   426→        <DialogContent className="sm:max-w-md">
+   427→          <DialogHeader>
+   428→            <DialogTitle>Delete Reminder</DialogTitle>
+   429→            <DialogDescription>
+   430→              This permanently removes the reminder from the queue. The action is recorded in the audit log.
+   431→            </DialogDescription>
+   432→          </DialogHeader>
+   433→          {deleteTarget && (
+   434→            <div className="space-y-3">
+   435→              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+   436→                <div className="flex items-center gap-2 font-medium text-foreground">
+   437→                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold", channelMeta[deleteTarget.channel as Channel]?.chip)}>
+   438→                    {channelMeta[deleteTarget.channel as Channel]?.label}
+   439→                  </span>
+   440→                  {deleteTarget.recipientName || deleteTarget.recipient}
+   441→                </div>
+   442→                <p className="mt-2 text-xs text-muted-foreground line-clamp-3">{deleteTarget.message}</p>
+   443→              </div>
+   444→              <DialogFooter>
+   445→                <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+   446→                  Keep
+   447→                </Button>
+   448→                <Button
+   449→                  variant="destructive"
+   450→                  onClick={() => deleteMut.mutate(deleteTarget.id)}
+   451→                  disabled={deleteMut.isPending}
+   452→                >
+   453→                  {deleteMut.isPending ? (
+   454→                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+   455→                  ) : (
+   456→                    <Trash2 className="mr-2 h-4 w-4" />
+   457→                  )}
+   458→                  Delete
+   459→                </Button>
+   460→              </DialogFooter>
+   461→            </div>
+   462→          )}
+   463→        </DialogContent>
+   464→      </Dialog>
+   465→    </div>
+   466→  );
+   467→}
+   468→
+   469→/* ---------- Reminder Card ---------- */
+   470→function ReminderCard({
+   471→  reminder: r,
+   472→  meId,
+   473→  isAdmin,
+   474→  onMarkSent,
+   475→  onMarkFailed,
+   476→  onRetry,
+   477→  onCancel,
+   478→  onDelete,
+   479→  updating,
+   480→}: {
+   481→  reminder: any;
+   482→  meId?: string;
+   483→  isAdmin: boolean;
+   484→  onMarkSent: () => void;
+   485→  onMarkFailed: () => void;
+   486→  onRetry: () => void;
+   487→  onCancel: () => void;
+   488→  onDelete: () => void;
+   489→  updating: boolean;
+   490→}) {
+   491→  const meta = channelMeta[r.channel as Channel] || channelMeta.WHATSAPP;
+   492→  const ChannelIcon = meta.icon;
+   493→  const overdue = isOverdue(r);
+   494→  const canModify = isAdmin || r.createdBy === meId;
+   495→
+   496→  return (
+   497→    <Card className="group flex flex-col gap-3 p-4 transition-all hover:shadow-md">
+   498→      {/* Header row: channel + recipient + status */}
+   499→      <div className="flex items-start justify-between gap-2">
+   500→        <div className="flex min-w-0 items-start gap-2.5">
+   501→          <div className={cn("shrink-0 rounded-lg p-2 ring-1", meta.ring)}>
+   502→            <ChannelIcon className={cn("h-4 w-4", meta.color)} />
+   503→          </div>
+   504→          <div className="min-w-0">
+   505→            <p className="truncate text-sm font-semibold text-foreground">
+   506→              {r.recipientName || "(no name)"}
+   507→            </p>
+   508→            <p className="truncate font-mono text-xs text-muted-foreground">{r.recipient}</p>
+   509→          </div>
+   510→        </div>
+   511→        <span
+   512→          className={cn(
+   513→            "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+   514→            statusBadge[r.status as Status] || statusBadge.QUEUED
+   515→          )}
+   516→        >
+   517→          {r.status}
+   518→        </span>
+   519→      </div>
+   520→
+   521→      {/* Message preview */}
+   522→      <p className="text-sm text-foreground/90 line-clamp-3 whitespace-pre-wrap break-words">
+   523→        {r.message}
+   524→      </p>
+   525→
+   526→      {/* Linked enquiry + customer chips */}
+   527→      {(r.enquiry || r.customer) && (
+   528→        <div className="flex flex-wrap gap-1.5">
+   529→          {r.enquiry && (
+   530→            <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+   531→              <FileText className="h-3 w-3" />
+   532→              {r.enquiry.enquiryNumber} · {r.enquiry.company}
+   533→            </span>
+   534→          )}
+   535→          {r.customer && (
+   536→            <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+   537→              <Building2 className="h-3 w-3" />
+   538→              {r.customer.company}
+   539→              {r.customer.contactPerson ? ` · ${r.customer.contactPerson}` : ""}
+   540→            </span>
+   541→          )}
+   542→        </div>
+   543→      )}
+   544→
+   545→      {/* Meta row: scheduled / sent / attempts */}
+   546→      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+   547→        <span className={cn("inline-flex items-center gap-1", overdue && "font-medium text-amber-600 dark:text-amber-400")}>
+   548→          <Clock className="h-3 w-3" />
+   549→          {overdue ? "Overdue · " : "Scheduled "}
+   550→          {fmtDateTime(r.scheduledAt)}
+   551→        </span>
+   552→        {r.sentAt && (
+   553→          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+   554→            <Send className="h-3 w-3" />
+   555→            Sent {fmtDateTime(r.sentAt)}
+   556→          </span>
+   557→        )}
+   558→        <span className="inline-flex items-center gap-1">
+   559→          <RefreshCw className="h-3 w-3" />
+   560→          {r.attemptCount || 0} attempt{(r.attemptCount || 0) === 1 ? "" : "s"}
+   561→        </span>
+   562→        {r.user && (
+   563→          <span className="inline-flex items-center gap-1">
+   564→            <User className="h-3 w-3" />
+   565→            {r.user.name}
+   566→          </span>
+   567→        )}
+   568→      </div>
+   569→
+   570→      {/* Error message */}
+   571→      {r.status === "FAILED" && r.errorMessage && (
+   572→        <div className="flex items-start gap-2 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/50 dark:text-red-300">
+   573→          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+   574→          <span className="break-words">{r.errorMessage}</span>
+   575→        </div>
+   576→      )}
+   577→
+   578→      {/* Action buttons */}
+   579→      <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
+   580→        {r.status === "QUEUED" && (
+   581→          <>
+   582→            <Button
+   583→              size="sm"
+   584→              variant="outline"
+   585→              className="h-7 border-emerald-500/40 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950"
+   586→              onClick={onMarkSent}
+   587→              disabled={updating}
+   588→            >
+   589→              <CheckCircle2 className="mr-1 h-3 w-3" /> Mark Sent
+   590→            </Button>
+   591→            <Button
+   592→              size="sm"
+   593→              variant="outline"
+   594→              className="h-7 border-red-500/40 text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950"
+   595→              onClick={onMarkFailed}
+   596→              disabled={updating}
+   597→            >
+   598→              <XCircle className="mr-1 h-3 w-3" /> Mark Failed
+   599→            </Button>
+   600→            {canModify && (
+   601→              <Button size="sm" variant="ghost" className="h-7 text-muted-foreground" onClick={onCancel} disabled={updating}>
+   602→                <XCircle className="mr-1 h-3 w-3" /> Cancel
+   603→              </Button>
+   604→            )}
+   605→          </>
+   606→        )}
+   607→        {r.status === "FAILED" && (
+   608→          <>
+   609→            <Button
+   610→              size="sm"
+   611→              variant="outline"
+   612→              className="h-7 border-sky-500/40 text-sky-600 hover:bg-sky-50 hover:text-sky-700 dark:text-sky-400 dark:hover:bg-sky-950"
+   613→              onClick={onRetry}
+   614→              disabled={updating}
+   615→            >
+   616→              <RefreshCw className="mr-1 h-3 w-3" /> Retry
+   617→            </Button>
+   618→            {canModify && (
+   619→              <Button size="sm" variant="ghost" className="h-7 text-muted-foreground" onClick={onCancel} disabled={updating}>
+   620→                <XCircle className="mr-1 h-3 w-3" /> Cancel
+   621→              </Button>
+   622→            )}
+   623→          </>
+   624→        )}
+   625→        {r.status === "SENT" && (
+   626→          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+   627→            <CheckCircle2 className="h-3 w-3" /> Delivered
+   628→          </span>
+   629→        )}
+   630→        {r.status === "CANCELLED" && (
+   631→          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+   632→            <XCircle className="h-3 w-3" /> Cancelled
+   633→          </span>
+   634→        )}
+   635→
+   636→        {isAdmin && (
+   637→          <Button
+   638→            size="sm"
+   639→            variant="ghost"
+   640→            className="ml-auto h-7 px-2 text-muted-foreground hover:text-red-600"
+   641→            onClick={onDelete}
+   642→            title="Delete (admin)"
+   643→          >
+   644→            <Trash2 className="h-3 w-3" />
+   645→          </Button>
+   646→        )}
+   647→      </div>
+   648→    </Card>
+   649→  );
+   650→}
+   651→
+   652→/* ---------- Create Reminder Form ---------- */
+   653→function CreateReminderForm({
+   654→  enquiries,
+   655→  customers,
+   656→  onSubmit,
+   657→  loading,
+   658→}: {
+   659→  enquiries: any[];
+   660→  customers: any[];
+   661→  onSubmit: (v: any) => void;
+   662→  loading: boolean;
+   663→}) {
+   664→  const [channel, setChannel] = useState<Channel>("WHATSAPP");
+   665→  const [recipient, setRecipient] = useState("");
+   666→  const [recipientName, setRecipientName] = useState("");
+   667→  const [message, setMessage] = useState("");
+   668→  const [enquiryId, setEnquiryId] = useState("");
+   669→  const [customerId, setCustomerId] = useState("");
+   670→  // default to now (rounded to minutes, local time) for datetime-local input
+   671→  const nowLocal = useMemo(() => {
+   672→    const d = new Date();
+   673→    d.setSeconds(0, 0);
+   674→    const tz = d.getTimezoneOffset() * 60000;
+   675→    return new Date(d.getTime() - tz).toISOString().slice(0, 16);
+   676→  }, []);
+   677→  const [scheduledAt, setScheduledAt] = useState(nowLocal);
+   678→
+   679→  const recipientHint =
+   680→    channel === "EMAIL"
+   681→      ? "Customer email address"
+   682→      : channel === "SMS"
+   683→      ? "Customer mobile number (SMS)"
+   684→      : "Customer WhatsApp number (with country code)";
+   685→
+   686→  const charCount = message.length;
+   687→  const overLimit = channel === "SMS" && charCount > 160;
+   688→
+   689→  // Auto-fill recipient + name when a customer is selected
+   690→  function onCustomerChange(id: string) {
+   691→    setCustomerId(id);
+   692→    if (id) {
+   693→      const c = customers.find((x) => x.id === id);
+   694→      if (c) {
+   695→        if (!recipient) {
+   696→          setRecipient(channel === "EMAIL" ? c.email || "" : c.mobile || "");
+   697→        }
+   698→        if (!recipientName) setRecipientName(c.contactPerson || "");
+   699→      }
+   700→    }
+   701→  }
+   702→
+   703→  function onEnquiryChange(id: string) {
+   704→    setEnquiryId(id);
+   705→    if (id) {
+   706→      const e = enquiries.find((x) => x.id === id);
+   707→      if (e) {
+   708→        if (!recipient) {
+   709→          setRecipient(channel === "EMAIL" ? e.email || "" : e.mobile || "");
+   710→        }
+   711→        if (!recipientName) setRecipientName(e.contactPerson || "");
+   712→        if (!customerId && e.customerId) setCustomerId(e.customerId);
+   713→      }
+   714→    }
+   715→  }
+   716→
+   717→  function submit() {
+   718→    if (!recipient.trim() || !message.trim() || overLimit) return;
+   719→    onSubmit({
+   720→      channel,
+   721→      recipient: recipient.trim(),
+   722→      recipientName: recipientName.trim() || undefined,
+   723→      message,
+   724→      enquiryId: enquiryId || undefined,
+   725→      customerId: customerId || undefined,
+   726→      scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+   727→    });
+   728→  }
+   729→
+   730→  return (
+   731→    <div className="space-y-3">
+   732→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   733→        <div>
+   734→          <Label>Channel</Label>
+   735→          <Select value={channel} onValueChange={(v) => setChannel(v as Channel)}>
+   736→            <SelectTrigger>
+   737→              <SelectValue />
+   738→            </SelectTrigger>
+   739→            <SelectContent>
+   740→              <SelectItem value="WHATSAPP">
+   741→                <span className="inline-flex items-center gap-2">
+   742→                  <MessageCircle className="h-3.5 w-3.5 text-emerald-600" /> WhatsApp
+   743→                </span>
+   744→              </SelectItem>
+   745→              <SelectItem value="SMS">
+   746→                <span className="inline-flex items-center gap-2">
+   747→                  <Smartphone className="h-3.5 w-3.5 text-sky-600" /> SMS
+   748→                </span>
+   749→              </SelectItem>
+   750→              <SelectItem value="EMAIL">
+   751→                <span className="inline-flex items-center gap-2">
+   752→                  <Mail className="h-3.5 w-3.5 text-violet-600" /> Email
+   753→                </span>
+   754→              </SelectItem>
+   755→            </SelectContent>
+   756→          </Select>
+   757→        </div>
+   758→        <div>
+   759→          <Label>Scheduled At</Label>
+   760→          <Input
+   761→            type="datetime-local"
+   762→            value={scheduledAt}
+   763→            onChange={(e) => setScheduledAt(e.target.value)}
+   764→          />
+   765→        </div>
+   766→      </div>
+   767→
+   768→      <div>
+   769→        <Label>Recipient *</Label>
+   770→        <Input
+   771→          value={recipient}
+   772→          onChange={(e) => setRecipient(e.target.value)}
+   773→          placeholder={channel === "EMAIL" ? "customer@example.com" : "+91 98765 43210"}
+   774→        />
+   775→        <p className="mt-1 text-[11px] text-muted-foreground">{recipientHint}</p>
+   776→      </div>
+   777→
+   778→      <div>
+   779→        <Label>Recipient Name (optional)</Label>
+   780→        <Input
+   781→          value={recipientName}
+   782→          onChange={(e) => setRecipientName(e.target.value)}
+   783→          placeholder="e.g. John Doe"
+   784→        />
+   785→      </div>
+   786→
+   787→      <div>
+   788→        <div className="flex items-center justify-between">
+   789→          <Label>Message *</Label>
+   790→          <span
+   791→            className={cn(
+   792→              "text-[11px]",
+   793→              overLimit
+   794→                ? "font-medium text-red-600"
+   795→                : channel === "SMS"
+   796→                ? "text-muted-foreground"
+   797→                : "text-muted-foreground"
+   798→            )}
+   799→          >
+   800→            {charCount}
+   801→            {channel === "SMS" ? " / 160 chars" : " chars"}
+   802→          </span>
+   803→        </div>
+   804→        <Textarea
+   805→          value={message}
+   806→          onChange={(e) => setMessage(e.target.value)}
+   807→          placeholder="Type the reminder message…"
+   808→          rows={4}
+   809→          className={cn(overLimit && "border-red-500 focus-visible:ring-red-500/30")}
+   810→        />
+   811→        {overLimit && (
+   812→          <p className="mt-1 text-[11px] text-red-600">
+   813→            SMS messages are limited to 160 characters. Trim the message or switch to WhatsApp/Email.
+   814→          </p>
+   815→        )}
+   816→      </div>
+   817→
+   818→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   819→        <div>
+   820→          <Label>Link to Enquiry (optional)</Label>
+   821→          <Select value={enquiryId} onValueChange={onEnquiryChange}>
+   822→            <SelectTrigger>
+   823→              <SelectValue placeholder="None" />
+   824→            </SelectTrigger>
+   825→            <SelectContent className="max-h-72">
+   826→              {enquiries.length === 0 ? (
+   827→                <SelectItem value="__none__" disabled>
+   828→                  No enquiries
+   829→                </SelectItem>
+   830→              ) : (
+   831→                enquiries.map((e: any) => (
+   832→                  <SelectItem key={e.id} value={e.id}>
+   833→                    {e.enquiryNumber} · {e.company}
+   834→                  </SelectItem>
+   835→                ))
+   836→              )}
+   837→            </SelectContent>
+   838→          </Select>
+   839→        </div>
+   840→        <div>
+   841→          <Label>Link to Customer (optional)</Label>
+   842→          <Select value={customerId} onValueChange={onCustomerChange}>
+   843→            <SelectTrigger>
+   844→              <SelectValue placeholder="None" />
+   845→            </SelectTrigger>
+   846→            <SelectContent className="max-h-72">
+   847→              {customers.length === 0 ? (
+   848→                <SelectItem value="__none__" disabled>
+   849→                  No customers
+   850→                </SelectItem>
+   851→              ) : (
+   852→                customers.map((c: any) => (
+   853→                  <SelectItem key={c.id} value={c.id}>
+   854→                    {c.company} · {c.contactPerson}
+   855→                  </SelectItem>
+   856→                ))
+   857→              )}
+   858→            </SelectContent>
+   859→          </Select>
+   860→        </div>
+   861→      </div>
+   862→
+   863→      <DialogFooter>
+   864→        <Button onClick={submit} disabled={loading || !recipient.trim() || !message.trim() || overLimit}>
+   865→          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+   866→          Queue Reminder
+   867→        </Button>
+   868→      </DialogFooter>
+   869→    </div>
+   870→  );
+   871→}
+   872→
+   873→/* ---------- Mark Failed Form ---------- */
+   874→function MarkFailedForm({
+   875→  recipient,
+   876→  defaultValue,
+   877→  loading,
+   878→  onSubmit,
+   879→}: {
+   880→  recipient?: string;
+   881→  defaultValue?: string;
+   882→  loading: boolean;
+   883→  onSubmit: (errMsg: string) => void;
+   884→}) {
+   885→  const [errMsg, setErrMsg] = useState(defaultValue || "");
+   886→
+   887→  return (
+   888→    <div className="space-y-3">
+   889→      {recipient && (
+   890→        <p className="text-xs text-muted-foreground">
+   891→          Recipient: <span className="font-mono text-foreground">{recipient}</span>
+   892→        </p>
+   893→      )}
+   894→      <div>
+   895→        <Label>Error / Reason</Label>
+   896→        <Textarea
+   897→          value={errMsg}
+   898→          onChange={(e) => setErrMsg(e.target.value)}
+   899→          placeholder="e.g. Number not on WhatsApp, invalid email, recipient blocked, etc."
+   900→          rows={3}
+   901→        />
+   902→      </div>
+   903→      <DialogFooter>
+   904→        <Button
+   905→          variant="destructive"
+   906→          onClick={() => onSubmit(errMsg.trim() || "Delivery failed")}
+   907→          disabled={loading}
+   908→        >
+   909→          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
+   910→          Mark as Failed
+   911→        </Button>
+   912→      </DialogFooter>
+   913→    </div>
+   914→  );
+   915→}
+   916→

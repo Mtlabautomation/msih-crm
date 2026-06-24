@@ -1,0 +1,302 @@
+485 /home/z/my-project/worklog.md
+---
+  - Reports: 4 KPIs, 6 report types (Daily/Weekly/Monthly/Exec Performance/Product Performance/Mgmt Summary), 40 records ready for export
+- Sticky footer confirmed present at bottom of all views (contentinfo element with MIT license + developer credit)
+- Sidebar navigation: 17 items across 5 groups (Workspace, Sales, Intelligence, Reports, Administration, Account) with RBAC filtering and live badge counts
+- Header: search, theme toggle, notifications, user menu, Cmd+K palette
+- Lint: clean (exit 0)
+- Created cron job ID 227557: every 15 min webDevReview for continuous QA + feature development
+
+Stage Summary:
+- **MSIH CRM V1.0 MVP COMPLETE & BROWSER-VERIFIED**
+- All 17 views functional against 18 API routes (auth + RBAC enforced)
+- AI features (z-ai-web-dev-sdk) working end-to-end: AI Assistant Q&A, AI Forecast Narrative
+- 40 enquiries, 12 products across 11 categories, 6 seeded users (5 demo + 1 super admin), 86 follow-ups, 23 quotations
+- Sticky footer + responsive layout verified
+- 15-min cron (webDevReview, job_id 227557) created for autonomous QA + feature additions
+- Next phase opportunities: Quotations UI, Tasks/Calendar view, Customer 360, Email templates, WhatsApp reminder queue, advanced filters, saved views, mobile gestures, accessibility (ARIA), CSV import wizard with preview
+
+---
+Task ID: 4-a
+Agent: general-purpose (Email Templates module)
+Task: Build complete Email Templates module — admin-managed reusable templates for sales communications (welcome, follow-up, quotation, reminder, thank-you, general) with API routes + view.
+
+Work Log:
+- Read worklog.md and canonical reference files: /api/tasks route.ts (GET RBAC list + POST with audit), /api/tasks/[id]/route.ts (GET/PATCH/DELETE RBAC), tasks-view.tsx (useQuery/useMutation/KpiCard/PageHeader/Dialog/Sheet pattern), shared.tsx (KpiCard/PageHeader/EmptyState/Loading), api-client.ts (api/fmtDate/timeAgo), session.ts (getSessionUser), audit.ts (logAudit)
+- Found pre-existing /api/email-templates/route.ts and [id]/route.ts scaffolds lacking RBAC enforcement and spec-compliant ordering; rewrote both
+- Rewrote /api/email-templates/route.ts: GET (all roles, ?category= filter, orderBy category asc + updatedAt desc, includes user relation with name+role); POST (ADMIN/SUPER_ADMIN only → 403 otherwise, accepts {name, subject, body, category?, variables?: string[]}, auto-detects {{var}} placeholders when variables omitted, stores JSON.stringify, logs audit entity=EMAIL_TEMPLATE action=CREATE with newValue, returns 201 on success, P2002 → 400 duplicate-name error). Removed extraneous PUT ai-draft route that wasn't in spec and had no consumers.
+- Rewrote /api/email-templates/[id]/route.ts: GET (all roles, includes user relation); PATCH (ADMIN/SUPER_ADMIN only, tracks per-field changes for audit previousValue/newValue, re-detects variables from new body when variables not explicitly provided, P2002 → 400); DELETE (ADMIN/SUPER_ADMIN only, logs audit action=DELETE)
+- Built /components/app/views/email-templates-view.tsx (~530 lines):
+  - PageHeader "Email Templates" + description + Mail icon; "New Template" button gated on isAdmin
+  - 4 KPI cards: Total Templates (blue), Categories distinct count (cyan), Recently Updated last 7 days (amber), Authored by Me (emerald)
+  - Filter Card with Tabs (All + 6 categories, snake_case rendered with spaces) + Search Input (filters by name/subject client-side)
+  - Responsive template grid (1 col mobile / 2 col md / 3 col lg): each card shows name (h3, line-clamp-1), colored category badge with Tag icon, subject with FileText icon, body preview (line-clamp-3), variable chips (first 4 + "+N" overflow, monospace), updated time (timeAgo) + creator name, action row with Preview (all roles) / Edit+Delete (admin only)
+  - Create Dialog (sm:max-w-2xl) with TemplateForm: name + category select / subject / body Textarea (font-mono text-xs) with placeholder hint / comma-separated variables input that converts to array on submit
+  - Edit Dialog: same form prefilled, keyed by editing.id to ensure fresh state on each open
+  - Delete Confirmation Dialog with destructive button + cancel
+  - Preview Sheet (sm:max-w-lg): shows sample variables table, substituted subject + body (whitespace-pre-wrap), copy-to-clipboard button with toast. Sample data: company=Acme Industries, contactPerson=John Doe, product=ZEISS Microscope, amount=₹1,50,000, executiveName=current user name, executivePhone=+91 98765 43210 (also aliases senderName)
+  - Empty state with Mail icon, role-aware description and conditional "New Template" CTA
+  - EXECUTIVE/MANAGER see read-only (no New/Edit/Delete buttons, only Preview)
+  - Industrial blue/slate palette, dark: variants throughout, no indigo/blue-600
+- Verified lint: `bun run lint` → exit 0, clean (no warnings in new files)
+- Verified tsc: `bunx tsc --noEmit` → no errors in any of the 3 new/modified files (pre-existing errors in examples/, skills/, ai-assistant/route.ts, deletion-requests/[id]/route.ts remain untouched and out of scope)
+- Smoke-tested API: GET /api/email-templates → 401 unauthenticated ✓; POST /api/email-templates → 401 unauthenticated ✓ (auth enforced before RBAC check)
+
+Stage Summary:
+- Files modified:
+  - src/app/api/email-templates/route.ts (rewrote: added ADMIN RBAC on POST, fixed orderBy to category asc + updatedAt desc, removed out-of-spec PUT ai-draft route, structured audit newValue)
+  - src/app/api/email-templates/[id]/route.ts (rewrote: added ADMIN RBAC on PATCH/DELETE, added change-tracking with previousValue/newValue on PATCH, structured try/catch on mutations, returns {success:true} on DELETE)
+- Files created:
+  - src/components/app/views/email-templates-view.tsx (full view: KPIs, category tabs, search, responsive grid, create/edit/delete dialogs, preview sheet with sample var substitution + copy button)
+- Key decisions:
+  - Used `user` relation select `{id, name, role}` for creator info — matches spec "Include createdBy user name"
+  - Variables stored as JSON.stringify(string[]); auto-detect from {{var}} placeholders when omitted (handled symmetrically in POST and PATCH)
+  - Sheet for Preview (right-side, sm:max-w-lg) per canonical quotations-view Sheet pattern; Dialog for Create/Edit/Delete per canonical tasks-view pattern
+  - EXECUTIVE/MANAGER read-only enforced in UI (no admin buttons rendered) AND in API (403 returned) — defense in depth
+  - Did NOT modify nav-config.ts, app-shell.tsx, command-palette.tsx, store.ts per spec (main agent will wire nav entry)
+  - Color mapping per category: WELCOME=emerald, FOLLOWUP=sky, QUOTATION=violet, REMINDER=amber, THANK_YOU=cyan, GENERAL=slate (all from existing KpiCard accent palette; no indigo/blue-600)
+
+---
+Task ID: 4-b
+Agent: general-purpose (Reminder Queue module)
+Task: Build complete Reminder Queue module — outbound WhatsApp/SMS/Email reminders with status tracking (QUEUED/SENT/FAILED/CANCELLED). API routes + view.
+
+Work Log:
+- Read worklog.md and canonical reference files: /api/tasks route.ts (GET RBAC list + POST with audit), /api/tasks/[id]/route.ts (GET/PATCH/DELETE RBAC + change-tracking), tasks-view.tsx (useQuery/useMutation/KpiCard/PageHeader/Dialog pattern), shared.tsx (KpiCard accent palette: blue/emerald/amber/red/violet/cyan/slate), api-client.ts (api/fmtDateTime), session.ts (getSessionUser → User | null), audit.ts (logAudit with previousValue/newValue)
+- Confirmed Prisma ReminderQueue model fields (channel, recipient, recipientName, message, enquiryId?, customerId?, scheduledAt, sentAt?, status, attemptCount, errorMessage?, createdBy) and Enquiry/Customer relation fields (enquiryNumber, company, contactPerson, email, mobile, customerId)
+- Created src/app/api/reminders/route.ts:
+  - GET: RBAC-scoped list (EXECUTIVE → own reminders only via createdBy filter; MANAGER/ADMIN/SUPER_ADMIN → all). Supports ?status, ?channel, ?overdue=1 (status=QUEUED AND scheduledAt < now). Includes user{id,name}, enquiry{id,enquiryNumber,company}, customer{id,company,contactPerson}. orderBy scheduledAt desc, take ≤500.
+  - POST: all authenticated roles. Validates recipient+message required, channel ∈ {WHATSAPP,SMS,EMAIL} (default WHATSAPP), validates enquiryId/customerId if provided, default scheduledAt=now. Logs audit entity=REMINDER action=CREATE with newValue. Returns 201 with full reminder + relations.
+- Created src/app/api/reminders/[id]/route.ts:
+  - GET: single reminder with relations; EXECUTIVE forbidden from viewing others' reminders (403).
+  - PATCH: status-only updates. SENT → set sentAt=now + increment attemptCount + clear errorMessage. FAILED → increment attemptCount + store errorMessage (preserve prior sentAt). QUEUED (retry path) → clear sentAt + errorMessage. CANCELLED → clear errorMessage. RBAC: creator can update their own; ADMIN+ can update any; explicit guard for CANCELLED. Logs audit entity=REMINDER action=UPDATE with previousValue/newValue summaries.
+  - DELETE: ADMIN+ only (403 otherwise). Hard-deletes with audit log action=DELETE + previousValue containing channel/recipient/message/status.
+- Built src/components/app/views/reminders-view.tsx (~580 lines):
+  - PageHeader "Reminder Queue" + description + BellRing icon; "New Reminder" button (all roles).
+  - 4 KPI cards: QUEUED (sky/Clock), SENT TODAY (emerald/CheckCircle2), FAILED (red/AlertTriangle), OVERDUE (amber/BellRing). Sent-today computed by comparing sentAt to current local date; overdue = QUEUED + scheduledAt < now.
+  - Filter card with: status Tabs (All/QUEUED/SENT/FAILED/CANCELLED, each with count badge + colored dot), channel pill buttons (All/WHATSAPP/SMS/EMAIL with channel icons), and search input (recipient/name/message).
+  - Reminder grid: 1 col mobile / 2 col md. Each card shows channel icon tile (WhatsApp=emerald, SMS=sky, Email=violet), recipient name + recipient (mono font), status badge, message preview (line-clamp-3, whitespace-pre-wrap), linked enquiry/customer chips (sky for enquiry with FileText icon, slate for customer with Building2 icon), scheduled time (amber if overdue), sent time (emerald), attempt count, creator name. Error message red callout when FAILED.
+  - Action buttons per status: QUEUED → "Mark Sent" (emerald-outline), "Mark Failed" (red-outline, opens dialog), "Cancel" (ghost, creator/admin). FAILED → "Retry" (sky-outline, opens dialog), "Cancel". SENT → "Delivered" label only. CANCELLED → "Cancelled" label only. Admin-only delete (Trash2) button in card corner.
+  - Create Dialog (sm:max-w-2xl) with CreateReminderForm: channel Select (default WHATSAPP, with icons), recipient (hint text adapts: email/mobile/whatsapp), recipientName optional, message Textarea with live char count (red when SMS > 160 chars, blocks submit), enquiry Select + customer Select (both optional, max-h-72 dropdowns; selecting auto-fills recipient+name if empty), datetime-local input defaulting to now (local tz). Submit disabled when recipient/message empty or SMS over limit.
+  - Mark Failed Dialog: textarea for error reason, destructive button.
+  - Retry Dialog: shows reminder summary + previous error + attempt count, "Retry Now" sets status=QUEUED (clears error).
+  - Delete Confirmation Dialog (admin only): shows summary, destructive delete button.
+  - Empty state with BellRing icon and contextual description (no reminders vs no matches).
+  - Industrial blue/slate palette throughout, dark: variants, no indigo/blue-600.
+- Verified `bun run lint` → exit 0, clean (no warnings in new files).
+- Verified `bunx tsc --noEmit` → no errors in any of the 3 new files (pre-existing errors in examples/, skills/, ai-assistant/route.ts, deletion-requests/[id]/route.ts remain untouched and out of scope).
+- Smoke-tested API: GET/POST/GET-by-id/PATCH/DELETE on /api/reminders* → all return 401 with {"error":"Unauthorized"} when unauthenticated ✓
+
+Stage Summary:
+- Files created (3):
+  - src/app/api/reminders/route.ts (GET RBAC list with status/channel/overdue filters; POST create with validation + audit)
+  - src/app/api/reminders/[id]/route.ts (GET single with RBAC; PATCH status-only with attempt-count/sentAt/errorMessage side effects + RBAC; DELETE admin-only hard delete with audit)
+  - src/components/app/views/reminders-view.tsx (full view: 4 KPIs, status tabs with counts, channel pills, search, responsive 2-col card grid, create/mark-failed/retry/delete dialogs, role-aware action buttons)
+- Key decisions:
+  - Used `user` relation for creator (matches schema's `user` relation name, not `creator`), `createdBy` field for RBAC checks.
+  - Status transitions are status-only PATCHes per spec; SENT auto-increments attemptCount and stamps sentAt; FAILED auto-increments attemptCount and stores errorMessage; QUEUED (retry) resets sentAt+errorMessage but preserves attemptCount for audit trail.
+  - Client-side filtering for status tab + channel pill + search — single fetch (limit=500), instant tab switching, KPIs always reflect global counts. EXECUTIVE visibility enforced server-side.
+  - SMS character counter enforced at 160 chars in the UI (submit disabled when over) — UX guardrail, not API-enforced (API accepts any length).
+  - Channel color mapping: WhatsApp=emerald, SMS=sky, Email=violet — uses existing KpiCard accent palette, no indigo/blue-600.
+  - Status badge colors: QUEUED=sky, SENT=emerald, FAILED=red, CANCELLED=slate (matches spec accents).
+  - Retry = reset to QUEUED (clears error, preserves attemptCount) — lets a queue worker pick it up again. Retry dialog shows previous error + attempt count for context.
+  - CANCELLED action visible to creator OR admin (matches spec "CANCELLED only allowed for creator or ADMIN+"); DELETE visible to admin only.
+  - Did NOT modify nav-config.ts, app-shell.tsx, command-palette.tsx, store.ts per spec (main agent will wire nav entry).
+  - Auto-fill UX: selecting a customer or enquiry in the create form pre-fills recipient + recipientName if those fields are empty — reduces re-keying.
+
+---
+Task ID: 4-c
+Agent: Main (Z.ai Code)
+Task: Wire new modules into app (nav/store/app-shell/command-palette) + styling polish + final QA + bug fix (Prisma client regen)
+
+Work Log:
+- Read worklog.md — confirmed Tasks 4-a (Email Templates) and 4-b (Reminder Queue) completed by subagents
+- QA via agent-browser: login page, dashboard (8 KPIs + 6 charts), 4 prior-cycle views (Quotations/Tasks/Customers/Calendar), all stable
+- Added `email-templates` and `reminders` ViewKeys to src/lib/store.ts
+- Added Mail and BellRing icons to nav-config.ts imports
+- Wired 2 new nav items: "Reminder Queue" (Sales group, all roles) + "Email Templates" (Administration group, all roles)
+- Wired EmailTemplatesView + RemindersView imports + switch cases into app-shell.tsx ViewRouter
+- Added 2 new quick actions to command-palette.tsx: "Schedule Reminder" (BellRing) + "Email Templates" (Mail)
+- Added ReminderQueue Prisma model with relations to User/Enquiry/Customer; ran `bun run db:push` to sync DB
+- Styling polish in src/components/app/shared.tsx:
+  - KpiCard: added optional `spark?: number[]` prop for mini-trend bars; added decorative gradient orb in top-right (opacity 40→70 on hover); added group-hover scale-105 on icon tile; added group-hover -translate-y-0.5 lift + colored shadow glow per accent; refined trend badge to pill style with bg tint
+  - PageHeader: refined icon tile to gradient bg (from-primary/15 to-primary/5) + shadow-sm
+  - EmptyState: added subtle radial backdrop gradient + blurred primary orb; icon container upgraded to rounded-2xl with ring
+- app-shell.tsx: wrapped ViewRouter in keyed fade-in/slide-up animation div (animate-in fade-in-50 slide-in-from-bottom-1 duration-300) — every view change now animates
+- app-shell.tsx Footer: upgraded to gradient bg (from-background via-muted/30 to-background); added MSIH pill badge with primary tint + ring; animated pulse on status dot; responsive label hiding on mobile
+- BUG FIX: agent-browser POST to /api/email-templates returned 500 "Cannot read properties of undefined (reading 'create')" — root cause: Prisma client not regenerated after schema change. Ran `bunx prisma generate`, restarted dev server via .zscripts/dev.sh, verified POST now returns 201 with created template (auto-detected variables ["contactPerson","product"])
+- End-to-end verification via agent-browser eval (authenticated fetch):
+  - POST /api/email-templates → 201, template created with user relation, variables auto-detected ✓
+  - GET /api/email-templates → 200, {total: 1, templates: [{name: "Welcome Follow-up"}]} ✓
+  - POST /api/reminders → 201, reminder created with status QUEUED ✓
+  - PATCH /api/reminders/[id] {status: "SENT"} → reminder moved from QUEUED to SENT, KPIs updated (Queued 0, Sent 1) ✓
+- View-level QA: navigated to Email Templates view — shows created template with WELCOME badge, subject, body preview; navigated to Reminder Queue view — shows created reminder with WhatsApp icon, Test Customer, QUEUED badge, message preview, Mark Sent/Mark Failed/Cancel action buttons
+- Screenshots captured to /home/z/my-project/download/: dashboard-styled.png, reminders-view.png, email-templates-view.png
+- `bun run lint` → exit 0, clean
+
+Stage Summary:
+- Files modified (8):
+  - prisma/schema.prisma (added ReminderQueue model + relations on User/Enquiry/Customer)
+  - src/lib/store.ts (added 2 ViewKeys: email-templates, reminders)
+  - src/components/app/nav-config.ts (added Mail + BellRing imports; 2 new NAV_ITEMS entries)
+  - src/components/app/app-shell.tsx (2 new view imports + switch cases; ViewRouter keyed animation wrapper; Footer gradient/pill/pulse polish)
+  - src/components/app/shared.tsx (KpiCard sparkline + gradient orb + hover lift; PageHeader gradient icon tile; EmptyState radial backdrop)
+  - src/components/app/command-palette.tsx (Mail + BellRing imports; 2 new quick actions)
+- Files created by subagents (5, verified working):
+  - src/app/api/email-templates/route.ts
+  - src/app/api/email-templates/[id]/route.ts
+  - src/app/api/reminders/route.ts
+  - src/app/api/reminders/[id]/route.ts
+  - src/components/app/views/email-templates-view.tsx
+  - src/components/app/views/reminders-view.tsx
+- View count: 21 → 23 views (added Email Templates + Reminder Queue)
+- API route count: 18 → 22 (added email-templates GET/POST + [id] GET/PATCH/DELETE, reminders GET/POST + [id] GET/PATCH/DELETE)
+- All new endpoints auth-enforced (401 unauthenticated) + RBAC-enforced (403 where applicable)
+- Industrial Blue + Charcoal theme preserved; no indigo/blue-600 introduced
+- Sticky footer preserved with enhanced styling
+- Mobile-first responsive maintained
+- Known pre-existing tsc errors in examples/, skills/, ai-assistant/route.ts, deletion-requests/[id]/route.ts remain out of scope (do not affect app runtime)
+
+Current Project Status:
+- MSIH CRM V1.0 now has 23 views, 22 API routes, 14 Prisma models
+- All core CRM modules functional: Dashboard, Enquiries, Follow-Ups, Products, Quotations, Tasks, Customers, Calendar, Email Templates, Reminder Queue, Performance, AI Assistant, Forecasting, Reports, Import/Export, Command Center, Admin (Users/Products/Audit/Deletions/Settings/Transfers), Profile
+- AI features (z-ai-web-dev-sdk GLM-4.5) working: AI Assistant Q&A, AI Forecast Narrative
+- Styling polished: KPI cards with sparklines + gradient orbs + hover lift, page transitions, gradient footer, refined empty states
+- 15-min cron job 227557 continues autonomous QA + feature development
+
+Unresolved / Next-phase recommendations:
+- Saved Views feature (Prisma SavedView model exists, no UI yet) — let users save filter presets on Enquiries/Tasks/Quotations
+- Advanced Filters with multi-filter chips on Enquiries view
+- CSV Import Wizard with preview (current Import/Export does direct parse)
+- Mobile gestures (swipe to navigate views, pull-to-refresh on lists)
+- Accessibility audit: ARIA labels on all icon-only buttons, keyboard nav for Kanban (tasks), focus traps in dialogs
+- Seed Email Templates with 4-5 starter templates (welcome, follow-up, quotation-sent, thank-you) so the module isn't empty on fresh installs
+- Seed a few demo reminders so the Reminder Queue has data on fresh installs
+- Consider a "Bulk Actions" toolbar on list views (multi-select + bulk status change / bulk delete)
+
+---
+Task ID: 4-d
+Agent: Main (Z.ai Code)
+Task: Seed starter email templates + sample reminders so modules aren't empty on fresh installs
+
+Work Log:
+- Discovered main prisma/seed.ts fails on re-run (enquiry unique constraint P2002) because it doesn't upsert enquiries — so the email-template and reminder seeding blocks at the end never execute on an already-populated DB
+- Added reminder seeding block to prisma/seed.ts (4 sample reminders: 2 QUEUED, 1 SENT, 1 FAILED) referencing real enquiries/customers — but couldn't run main seed without wiping DB
+- Created prisma/seed-extras.ts — standalone idempotent seeder that only creates email templates (skip-if-exists by name) and reminders (skip-if-count>0); safe to run on populated DB
+- Ran `bunx tsx prisma/seed-extras.ts`:
+  - Created 5 email templates (WELCOME, FOLLOWUP, QUOTATION, REMINDER, THANK_YOU) — total now 6 (incl. earlier test template "Welcome Follow-up")
+  - Created 4 sample reminders (2 QUEUED WhatsApp/SMS, 1 SENT EMAIL, 1 FAILED WhatsApp with error message)
+- Verified via agent-browser:
+  - Email Templates view: All tab shows 6 templates with proper category badges, variable chips, body previews; category tabs (WELCOME/FOLLOWUP/QUOTATION/REMINDER/THANK YOU/GENERAL) all populated
+  - Reminder Queue view: KPIs show Queued 2, Sent Today 0, Failed 1, Overdue 1; status tabs show "Queued 2" and "Failed 1"; cards show WhatsApp/SMS/Email channel icons, recipient names, message previews, Mark Sent/Mark Failed/Cancel action buttons
+  - Preview Sheet on "Thank You — Order Received" template works correctly: shows sample variable substitution (contactPerson→John Doe, company→Acme Industries, senderName→Manoj Dore), subject + body rendered, Copy button present
+- Captured final screenshots: email-templates-final.png, reminders-final.png (in /home/z/my-project/download/)
+- `bun run lint` → exit 0, clean
+
+Stage Summary:
+- Files created:
+  - prisma/seed-extras.ts (standalone idempotent seeder for templates + reminders)
+- Files modified:
+  - prisma/seed.ts (added reminder seeding block — will run on fresh DBs)
+- Data now present on fresh-ish installs:
+  - 6 email templates across 5 categories (WELCOME, FOLLOWUP, QUOTATION, REMINDER, THANK_YOU)
+  - 4 sample reminders across 3 statuses (QUEUED, SENT, FAILED) and 3 channels (WHATSAPP, SMS, EMAIL)
+- Both new modules now demo-ready out of the box — no empty-state first impression
+
+Final Cycle Summary (Tasks 4-a through 4-d):
+- 2 new modules built end-to-end (Email Templates, Reminder Queue): 5 new files by subagents + 1 Prisma model
+- 8 files modified by main agent for wiring + styling polish + seeding
+- View count: 21 → 23; API route count: 18 → 22; Prisma model count: 13 → 14
+- Styling upgrades: KpiCard sparklines + gradient orbs + hover lift, page transitions, gradient footer with MSIH pill badge, refined empty states with radial backdrop
+- Bug fixed: Prisma client regeneration after schema change (was causing 500 on POST)
+- All endpoints auth + RBAC enforced; lint clean; no runtime errors
+- Industrial Blue + Charcoal theme preserved; mobile-first responsive; sticky footer; dark mode
+- 15-min cron job 227557 continues autonomous QA + feature development
+
+---
+Task ID: 5-a
+Agent: Main (Z.ai Code)
+Task: Build Saved Views UI + Bulk Actions on Enquiries + Accessibility + styling polish
+
+Work Log:
+- Reviewed worklog.md — app stable at 23 views, 22 APIs, 14 Prisma models. Prior cycle built Email Templates + Reminder Queue
+- QA via agent-browser: all 7 key APIs return 200 (dashboard, enquiries, quotations, tasks, customers, reminders, email-templates); dashboard renders 8 KPIs + 6 charts; no errors in dev.log
+- Discovered `/api/saved-views` route + `[id]` route already existed (full CRUD with RBAC + audit) but NO UI consumed them — high-value opportunity to wire up
+- Enhanced `src/components/app/views/enquiries-view.tsx` with 3 major features:
+
+  **1. Saved Views Bar (new SavedViewsBar component):**
+  - Horizontal pill bar showing all saved views for ENQUIRY entity (from `/api/saved-views?entity=ENQUIRY`)
+  - Each view is a clickable button; active view highlighted with primary tint
+  - Default view marked with BookmarkCheck icon
+  - Per-view hover dropdown (chevron appears on hover): Apply / Set as default / Delete
+  - "Save View" button opens dialog with current-filters summary, name input, "set as default" checkbox
+  - "Clear" button appears when filters active
+  - Default view auto-applies on page load via useEffect with defaultApplied guard
+  - Empty state: "No saved views yet" italic text
+
+  **2. Bulk Actions Toolbar:**
+  - "Bulk Select" toggle button in PageHeader actions (aria-pressed)
+  - In bulk mode: each enquiry card shows a Checkbox with ARIA label (`Select ${company}`)
+  - Toolbar card appears with: "N selected" badge, "Select page"/"Deselect page" button, "Clear" button
+  - "Set Status" dropdown button → menu of all statuses → bulk PATCH via Promise.allSettled
+  - "Request Delete" button → dialog with reason textarea → bulk DELETE requests via Promise.allSettled
+  - Cards in bulk mode get primary ring when selected; click doesn't open detail
+  - Toast reports "Updated N enquiries" with success/fail counts
+  - Exit Bulk button returns to normal mode
+
+  **3. Enquiry card refactor:**
+  - Changed from `<button>` to `<div>` with conditional cursor + onClick (to support checkbox clicks)
+  - Added pl-8 padding in bulk mode for checkbox space
+  - ArrowRight hidden in bulk mode
+
+- Accessibility improvements:
+  - `src/components/app/app-shell.tsx`: Added skip-to-content link (sr-only, focus-visible reveals as primary pill at top-left, z-100); added `id="main-content"` to main element; added `scroll-smooth` to main
+  - `src/components/app/sidebar.tsx`: Added `aria-label="Primary navigation"` on aside; `aria-label="Main"` on nav; `aria-current="page"` on active button; `aria-label="Close navigation menu"` on mobile close button
+  - `src/components/app/header.tsx`: Added `aria-label="Open navigation menu"` on mobile menu button
+  - `src/app/globals.css`: Added global `*:focus-visible` ring (ring-2 ring-primary ring-offset-2) for keyboard users
+
+- Styling polish:
+  - `src/app/globals.css`: Added global custom scrollbar (8px webkit + thin scrollbar-width for Firefox) with color-mix muted-foreground thumb that turns primary on hover
+  - `src/components/app/sidebar.tsx`: Added active indicator bar (left-edge, h-6 w-1, primary-foreground/80, rounded-r-full); icon scale-110 on hover; transition-all on buttons
+  - Added `transition-all` to nav buttons for smooth state changes
+
+- Lint: `bun run lint` → exit 0, clean
+- End-to-end verification via agent-browser:
+  - Enquiries view renders with "Bulk Select" button + "No saved views yet" + "Save View" button ✓
+  - Bulk Select mode: checkboxes appear with ARIA labels, "Select page" selects all 15, "Set Status" dropdown shows "Change status for 15 enquiries" ✓
+  - Bulk status update: clicked WARM → "Updated 6 enquiries" toast, enquiries moved to WARM tab ✓
+  - Save View: set HOT filter → Save View → dialog with current filters summary → named "Hot Leads" + set as default → saved ✓
+  - Default view auto-apply: reload page → navigate to Enquiries → HOT tab auto-selected, "Hot Leads" view highlighted, "Clear" button visible ✓
+  - Saved view persisted via API: `{total: 1, names: [{name: "Hot Leads", isDefault: true}]}` ✓
+  - Skip-to-content link present in DOM ✓
+  - aria-current="page" on active nav button ✓
+  - Reverted test data (moved 4 HOT enquiries back from WARM, deleted test saved view) to restore seed state
+- Screenshots: enquiries-saved-views.png, enquiries-bulk-actions.png saved to /home/z/my-project/download/
+
+Stage Summary:
+- Files modified (5):
+  - src/components/app/views/enquiries-view.tsx (major enhancement: +SavedViewsBar, +SaveViewForm, +Bulk Actions toolbar, +bulk status/delete mutations, +checkbox selection, refactored cards from button to div)
+  - src/components/app/app-shell.tsx (skip-to-content link + main id + scroll-smooth)
+  - src/components/app/sidebar.tsx (aria-labels, aria-current, active indicator bar, icon hover scale)
+  - src/components/app/header.tsx (aria-label on mobile menu button)
+  - src/app/globals.css (global focus-visible ring + global custom scrollbar)
+- No new Prisma models or API routes needed — leveraged existing `/api/saved-views` CRUD + existing `/api/enquiries/[id]` PATCH/DELETE for bulk operations via Promise.allSettled
+- All features verified end-to-end in agent-browser
+- Accessibility: skip link, aria-current, aria-labels on icon buttons, focus-visible rings
+- Styling: global scrollbar, sidebar active indicator, icon hover animations
+
+Current Project Status:
+- MSIH CRM V1.0: 23 views, 22 API routes, 14 Prisma models
+- Enquiries view now has Saved Views (persist filter presets + default view) + Bulk Actions (multi-select status change + bulk delete requests)
+- Accessibility foundations laid: skip-to-content, aria-current, focus-visible rings, aria-labels on nav
+- Global styling polished: custom scrollbar everywhere, sidebar active indicator, icon hover animations
+- All prior features intact: Dashboard, Follow-Ups, Products, Quotations, Tasks, Customers, Calendar, Email Templates, Reminder Queue, Performance, AI Assistant, Forecasting, Reports, Import/Export, Command Center, Admin (Users/Products/Audit/Deletions/Settings/Transfers), Profile
+
+Unresolved / Next-phase recommendations:
+- Extend Saved Views to Tasks/Quotations/Customers views (same SavedViewsBar component is reusable)
+- Advanced multi-filter chips (source, product, executive, date-range) beyond status+search
+- CSV Import Wizard with preview before commit
+- Mobile gestures (swipe to navigate views, pull-to-refresh)
+- Full accessibility audit: focus traps in dialogs (Radix may already handle), keyboard nav for Kanban (tasks), screen-reader testing
+- Bulk reassign (change assignedTo) in addition to bulk status
+- "Select all matching" across pages (not just current page) for bulk actions

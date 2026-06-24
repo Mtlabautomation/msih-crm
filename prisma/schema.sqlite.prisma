@@ -1,0 +1,329 @@
+// MSIH CRM V1.0 — Prisma Schema
+// Developer: Manoj Dore
+// License: MIT
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ ENUMS (string-based for SQLite) ============
+// Role: SUPER_ADMIN | ADMIN | MANAGER | EXECUTIVE
+// LeadStatus: NEW | HOT | WARM | COLD | LOST | CONVERTED | QUALIFIED
+// FollowUpMethod: CALL | EMAIL | WHATSAPP | MEETING | VISIT
+// EnquirySource: WEBSITE | REFERENCE | EXHIBITION | COLD_CALL | EMAIL_CAMPAIGN | SOCIAL_MEDIA | TELEMARKETING | OTHER
+// QuotationStatus: DRAFT | SENT | ACCEPTED | REJECTED | EXPIRED | REVISED
+// DeletionStatus: PENDING | APPROVED | REJECTED
+// Priority: LOW | MEDIUM | HIGH | CRITICAL
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  password      String
+  role          String   @default("EXECUTIVE") // SUPER_ADMIN | ADMIN | MANAGER | EXECUTIVE
+  phone         String?
+  employeeId    String?
+  designation   String?
+  city          String?
+  state         String?
+  active        Boolean  @default(true)
+  avatar        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  enquiries         Enquiry[]         @relation("AssignedExec")
+  createdEnquiries  Enquiry[]         @relation("CreatedBy")
+  followUps         FollowUp[]
+  quotations        Quotation[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  deletionRequests  DeletionRequest[] @relation("DeletionRequester")
+  approvedDeletions DeletionRequest[] @relation("DeletionApprover")
+  transfersInitiated LeadTransfer[]   @relation("TransferFrom")
+  transfersReceived  LeadTransfer[]   @relation("TransferTo")
+  transferApprover   LeadTransfer[]   @relation("TransferApprover")
+  activities         Activity[]
+  tasks              Task[]           @relation("TaskAssignee")
+  tasksCreatedBy     Task[]           @relation("TaskCreator")
+  emailTemplates     EmailTemplate[]
+  savedViews         SavedView[]
+  reminders          ReminderQueue[]
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  company       String
+  contactPerson String
+  mobile        String
+  email         String?
+  city          String?
+  state         String?
+  address       String?
+  industry      String?
+  gstin         String?
+  website       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdBy     String
+
+  enquiries     Enquiry[]
+  activities    Activity[]
+  reminders     ReminderQueue[]
+}
+
+model Enquiry {
+  id                 String   @id @default(cuid())
+  enquiryNumber      String   @unique
+  date               DateTime @default(now())
+  source             String   @default("WEBSITE")
+  customerId         String
+  company            String
+  contactPerson      String
+  mobile             String
+  email              String?
+  productInterested  String
+  productId          String?
+  budget             Float?
+  city               String?
+  state              String?
+  specification      String?
+  remarks            String?
+  attachments        String?  // JSON string of file paths
+  assignedTo         String
+  status             String   @default("NEW") // NEW | QUALIFIED | HOT | WARM | COLD | LOST | CONVERTED
+  leadScore          Int      @default(0)     // 0-100
+  conversionProb     Float    @default(0)     // 0-100 %
+  lastFollowUpDate   DateTime?
+  nextFollowUpDate   DateTime?
+  convertedAt        DateTime?
+  orderValue         Float?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdBy          String
+
+  customer           Customer @relation(fields: [customerId], references: [id])
+  assignedExecutive  User     @relation("AssignedExec", fields: [assignedTo], references: [id])
+  creator            User     @relation("CreatedBy", fields: [createdBy], references: [id])
+  product            Product? @relation(fields: [productId], references: [id])
+  followUps          FollowUp[]
+  quotations         Quotation[]
+  activities         Activity[]
+  transfers          LeadTransfer[]
+  tasks              Task[]
+  reminders          ReminderQueue[]
+}
+
+model FollowUp {
+  id              String   @id @default(cuid())
+  enquiryId       String
+  date            DateTime @default(now())
+  nextFollowUpDate DateTime?
+  method          String   @default("CALL") // CALL | EMAIL | WHATSAPP | MEETING | VISIT
+  status          String   @default("WARM")  // HOT | WARM | COLD | LOST | CONVERTED
+  notes           String
+  outcome         String?
+  completed       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  createdBy       String
+
+  enquiry         Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  user            User    @relation(fields: [createdBy], references: [id])
+}
+
+model Quotation {
+  id           String   @id @default(cuid())
+  enquiryId    String
+  number       String   @unique
+  date         DateTime @default(now())
+  amount       Float
+  status       String   @default("DRAFT") // DRAFT | SENT | ACCEPTED | REJECTED | EXPIRED | REVISED
+  validUntil   DateTime?
+  items        String?  // JSON
+  notes        String?
+  pdfPath      String?
+  approvedBy   String?
+  approvedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String
+
+  enquiry      Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  user         User    @relation(fields: [createdBy], references: [id])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  category      String
+  subCategory   String?
+  description   String?
+  specifications String?  // JSON
+  applications  String?   // JSON array
+  industries    String?   // JSON array
+  image         String?
+  brochurePath  String?
+  basePrice     Float?
+  unit          String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  enquiries     Enquiry[]
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String
+  userName      String
+  action        String   // CREATE | UPDATE | DELETE | LOGIN | LOGOUT | APPROVE | REJECT | TRANSFER
+  entity        String   // ENQUIRY | FOLLOWUP | QUOTATION | USER | PRODUCT | CUSTOMER
+  entityId      String?
+  description   String
+  previousValue String?  // JSON
+  newValue      String?  // JSON
+  ipAddress     String?
+  userAgent     String?
+  timestamp     DateTime @default(now())
+
+  user          User @relation(fields: [userId], references: [id])
+}
+
+model DeletionRequest {
+  id            String   @id @default(cuid())
+  entityType    String   // ENQUIRY | FOLLOWUP | QUOTATION | CUSTOMER
+  entityId      String
+  entityLabel   String
+  reason        String
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  requestedById String
+  approvedById  String?
+  approvedAt    DateTime?
+  adminNote     String?
+  backupData    String?  // JSON snapshot
+  createdAt     DateTime @default(now())
+
+  requestedBy   User  @relation("DeletionRequester", fields: [requestedById], references: [id])
+  approvedBy    User? @relation("DeletionApprover", fields: [approvedById], references: [id])
+}
+
+model LeadTransfer {
+  id            String   @id @default(cuid())
+  enquiryId     String
+  fromUserId    String
+  toUserId      String
+  reason        String
+  status        String   @default("COMPLETED") // PENDING | COMPLETED | REJECTED
+  approverId    String?
+  createdAt     DateTime @default(now())
+
+  enquiry       Enquiry @relation(fields: [enquiryId], references: [id])
+  fromUser      User    @relation("TransferFrom", fields: [fromUserId], references: [id])
+  toUser        User    @relation("TransferTo", fields: [toUserId], references: [id])
+  approver      User?   @relation("TransferApprover", fields: [approverId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // FOLLOWUP_REMINDER | DELETION_APPROVED | LEAD_TRANSFERRED | SYSTEM | AI_ALERT
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  enquiryId   String?
+  customerId  String?
+  userId      String
+  type        String   // NOTE | CALL | EMAIL | MEETING | DOCUMENT
+  content     String
+  createdAt   DateTime @default(now())
+
+  enquiry     Enquiry?  @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  enquiryId   String?
+  assigneeId  String
+  createdBy   String
+  priority    String   @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status      String   @default("OPEN")   // OPEN | IN_PROGRESS | DONE | CANCELLED
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  enquiry     Enquiry? @relation(fields: [enquiryId], references: [id])
+  assignee    User     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  creator     User     @relation("TaskCreator", fields: [createdBy], references: [id])
+}
+
+model Setting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+}
+
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  subject     String
+  body        String
+  category    String   @default("GENERAL") // WELCOME | FOLLOWUP | QUOTATION | REMINDER | THANK_YOU | GENERAL
+  variables   String?  // JSON array of variable names like ["company","contactPerson"]
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User @relation(fields: [createdBy], references: [id])
+}
+
+model SavedView {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  entity      String   // ENQUIRY | FOLLOWUP | QUOTATION | CUSTOMER | TASK
+  filters     String   // JSON of filter state
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ReminderQueue {
+  id           String   @id @default(cuid())
+  channel      String   @default("WHATSAPP") // WHATSAPP | SMS | EMAIL
+  recipient    String   // phone number or email
+  recipientName String?
+  message      String
+  enquiryId    String?
+  customerId   String?
+  scheduledAt  DateTime @default(now())
+  sentAt       DateTime?
+  status       String   @default("QUEUED") // QUEUED | SENT | FAILED | CANCELLED
+  attemptCount Int      @default(0)
+  errorMessage String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  enquiry      Enquiry?  @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  user         User      @relation(fields: [createdBy], references: [id])
+}

@@ -1,0 +1,763 @@
+     1→"use client";
+     2→
+     3→// MSIH CRM V1.0 — Module B: Enquiry Management
+     4→// List + filters + create dialog + detail drawer
+     5→// Developer: Manoj Dore
+     6→
+     7→import { useState, useMemo, useEffect } from "react";
+     8→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+     9→import { api, fmtINR, fmtDate, fmtDateTime, timeAgo } from "@/lib/api-client";
+    10→import { useUI } from "@/lib/store";
+    11→import { useSession } from "next-auth/react";
+    12→import { KpiCard, PageHeader, StatusBadge, EmptyState, Loading, SectionCard } from "../shared";
+    13→import { Button } from "@/components/ui/button";
+    14→import { Input } from "@/components/ui/input";
+    15→import { Label } from "@/components/ui/label";
+    16→import { Textarea } from "@/components/ui/textarea";
+    17→import { Card } from "@/components/ui/card";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Checkbox } from "@/components/ui/checkbox";
+    20→import {
+    21→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    22→} from "@/components/ui/select";
+    23→import {
+    24→  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+    25→} from "@/components/ui/dialog";
+    26→import {
+    27→  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+    28→} from "@/components/ui/sheet";
+    29→import {
+    30→  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+    31→  DropdownMenuSeparator, DropdownMenuTrigger,
+    32→} from "@/components/ui/dropdown-menu";
+    33→import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    34→import { toast } from "sonner";
+    35→import {
+    36→  Inbox, Plus, Search, Phone, Mail, MapPin, User, Package, IndianRupee,
+    37→  Calendar, FileText, PhoneCall, ArrowRight, Copy, AlertTriangle, Loader2,
+    38→  Flame, TrendingUp, MessageSquare, History, ArrowLeftRight, Building2,
+    39→  Bookmark, BookmarkCheck, Trash2, CheckSquare, X, ChevronDown, Save,
+    40→} from "lucide-react";
+    41→import { cn } from "@/lib/utils";
+    42→import { EnquiryDetail } from "./enquiry-detail";
+    43→
+    44→const STATUSES = ["all", "NEW", "QUALIFIED", "HOT", "WARM", "COLD", "CONVERTED", "LOST"];
+    45→const SOURCES = ["WEBSITE", "REFERENCE", "EXHIBITION", "COLD_CALL", "EMAIL_CAMPAIGN", "SOCIAL_MEDIA", "TELEMARKETING", "OTHER"];
+    46→
+    47→export function EnquiriesView() {
+    48→  const { data: session } = useSession();
+    49→  const role = (session?.user as any)?.role || "EXECUTIVE";
+    50→  const { enquiryId, openEnquiry } = useUI();
+    51→  const qc = useQueryClient();
+    52→
+    53→  const [status, setStatus] = useState("all");
+    54→  const [search, setSearch] = useState("");
+    55→  const [page, setPage] = useState(1);
+    56→  const [createOpen, setCreateOpen] = useState(false);
+    57→
+    58→  // Bulk selection state
+    59→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    60→  const [bulkMode, setBulkMode] = useState(false);
+    61→  const [saveViewOpen, setSaveViewOpen] = useState(false);
+    62→  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+    63→  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+    64→  const [bulkDeleteReason, setBulkDeleteReason] = useState("");
+    65→
+    66→  const { data, isLoading } = useQuery({
+    67→    queryKey: ["enquiries", status, search, page],
+    68→    queryFn: () => {
+    69→      const p = new URLSearchParams({ status, search, page: String(page), limit: "15" });
+    70→      return api<any>(`/api/enquiries?${p}`);
+    71→    },
+    72→  });
+    73→
+    74→  const { data: productsData } = useQuery({
+    75→    queryKey: ["products-list"],
+    76→    queryFn: () => api<any>("/api/products"),
+    77→  });
+    78→  const { data: usersData } = useQuery({
+    79→    queryKey: ["users-list"],
+    80→    queryFn: () => api<any>("/api/users"),
+    81→  });
+    82→
+    83→  // Saved views for this entity
+    84→  const { data: savedViewsData, refetch: refetchViews } = useQuery({
+    85→    queryKey: ["saved-views", "ENQUIRY"],
+    86→    queryFn: () => api<any>("/api/saved-views?entity=ENQUIRY"),
+    87→  });
+    88→  const savedViews = savedViewsData?.views || [];
+    89→  const defaultView = savedViews.find((v: any) => v.isDefault);
+    90→
+    91→  // Apply default view on first load (once data arrives and no manual selection yet)
+    92→  const [defaultApplied, setDefaultApplied] = useState(false);
+    93→  useEffect(() => {
+    94→    if (!defaultApplied && defaultView && status === "all" && !search && !activeViewId) {
+    95→      try {
+    96→        const f = JSON.parse(defaultView.filters);
+    97→        // eslint-disable-next-line react-hooks/set-state-in-effect
+    98→        if (f.status) setStatus(f.status);
+    99→        if (f.search !== undefined) setSearch(f.search);
+   100→        setActiveViewId(defaultView.id);
+   101→      } catch {}
+   102→      setDefaultApplied(true);
+   103→    }
+   104→  }, [defaultView, defaultApplied, status, search, activeViewId]);
+   105→
+   106→  const selected = enquiryId;
+   107→  const enquiries = data?.enquiries || [];
+   108→  const total = data?.total || 0;
+   109→  const totalPages = data?.totalPages || 1;
+   110→
+   111→  // Bulk selection helpers
+   112→  const allOnPageSelected = enquiries.length > 0 && enquiries.every((e: any) => selectedIds.has(e.id));
+   113→  const toggleAll = () => {
+   114→    const next = new Set(selectedIds);
+   115→    if (allOnPageSelected) {
+   116→      enquiries.forEach((e: any) => next.delete(e.id));
+   117→    } else {
+   118→      enquiries.forEach((e: any) => next.add(e.id));
+   119→    }
+   120→    setSelectedIds(next);
+   121→  };
+   122→  const toggleOne = (id: string) => {
+   123→    const next = new Set(selectedIds);
+   124→    if (next.has(id)) next.delete(id);
+   125→    else next.add(id);
+   126→    setSelectedIds(next);
+   127→  };
+   128→
+   129→  // Save current view
+   130→  const saveViewMut = useMutation({
+   131→    mutationFn: (body: any) => api<any>("/api/saved-views", { method: "POST", body: JSON.stringify(body) }),
+   132→    onSuccess: () => {
+   133→      toast.success("View saved");
+   134→      refetchViews();
+   135→      setSaveViewOpen(false);
+   136→    },
+   137→    onError: (e: any) => toast.error(e.message || "Failed to save view"),
+   138→  });
+   139→
+   140→  // Delete saved view
+   141→  const deleteViewMut = useMutation({
+   142→    mutationFn: (id: string) => api<any>(`/api/saved-views/${id}`, { method: "DELETE" }),
+   143→    onSuccess: () => {
+   144→      toast.success("View deleted");
+   145→      refetchViews();
+   146→    },
+   147→    onError: (e: any) => toast.error(e.message || "Failed to delete view"),
+   148→  });
+   149→
+   150→  // Set as default
+   151→  const setDefaultMut = useMutation({
+   152→    mutationFn: ({ id, isDefault }: { id: string; isDefault: boolean }) =>
+   153→      api<any>(`/api/saved-views/${id}`, { method: "PATCH", body: JSON.stringify({ isDefault }) }),
+   154→    onSuccess: () => {
+   155→      toast.success("Default view updated");
+   156→      refetchViews();
+   157→    },
+   158→    onError: (e: any) => toast.error(e.message || "Failed"),
+   159→  });
+   160→
+   161→  const applyView = (v: any) => {
+   162→    try {
+   163→      const f = JSON.parse(v.filters);
+   164→      setStatus(f.status || "all");
+   165→      setSearch(f.search || "");
+   166→      setPage(1);
+   167→      setActiveViewId(v.id);
+   168→      setSelectedIds(new Set());
+   169→      toast.info(`Applied view: ${v.name}`);
+   170→    } catch {
+   171→      toast.error("Invalid view data");
+   172→    }
+   173→  };
+   174→
+   175→  const clearFilters = () => {
+   176→    setStatus("all");
+   177→    setSearch("");
+   178→    setPage(1);
+   179→    setActiveViewId(null);
+   180→    setSelectedIds(new Set());
+   181→  };
+   182→
+   183→  // Bulk status update
+   184→  const bulkStatusMut = useMutation({
+   185→    mutationFn: async ({ ids, newStatus }: { ids: string[]; newStatus: string }) => {
+   186→      const results = await Promise.allSettled(
+   187→        ids.map((id) =>
+   188→          api<any>(`/api/enquiries/${id}`, { method: "PATCH", body: JSON.stringify({ status: newStatus }) })
+   189→        )
+   190→      );
+   191→      const ok = results.filter((r) => r.status === "fulfilled").length;
+   192→      const fail = results.filter((r) => r.status === "rejected").length;
+   193→      return { ok, fail };
+   194→    },
+   195→    onSuccess: ({ ok, fail }) => {
+   196→      toast.success(`Updated ${ok} enquiries${fail ? `, ${fail} failed` : ""}`);
+   197→      setSelectedIds(new Set());
+   198→      setBulkMode(false);
+   199→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   200→      qc.invalidateQueries({ queryKey: ["dashboard"] });
+   201→    },
+   202→    onError: (e: any) => toast.error(e.message || "Bulk update failed"),
+   203→  });
+   204→
+   205→  // Bulk delete request
+   206→  const bulkDeleteMut = useMutation({
+   207→    mutationFn: async ({ ids, reason }: { ids: string[]; reason: string }) => {
+   208→      const results = await Promise.allSettled(
+   209→        ids.map((id) =>
+   210→          api<any>(`/api/enquiries/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) })
+   211→        )
+   212→      );
+   213→      const ok = results.filter((r) => r.status === "fulfilled").length;
+   214→      const fail = results.filter((r) => r.status === "rejected").length;
+   215→      return { ok, fail };
+   216→    },
+   217→    onSuccess: ({ ok, fail }) => {
+   218→      toast.success(`Requested deletion for ${ok} enquiries${fail ? `, ${fail} failed` : ""}`);
+   219→      setSelectedIds(new Set());
+   220→      setBulkMode(false);
+   221→      setBulkDeleteOpen(false);
+   222→      setBulkDeleteReason("");
+   223→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   224→    },
+   225→    onError: (e: any) => toast.error(e.message || "Bulk delete failed"),
+   226→  });
+   227→
+   228→  const activeFilters = (status !== "all" || search !== "");
+   229→
+   230→  return (
+   231→    <div className="space-y-5">
+   232→      <PageHeader
+   233→        title="Enquiry Management"
+   234→        description="Capture and track customer enquiries — from lead to order."
+   235→        icon={Inbox}
+   236→        actions={
+   237→          <div className="flex items-center gap-2">
+   238→            <Button variant="outline" size="sm" onClick={() => setBulkMode((b) => !b)} aria-pressed={bulkMode}>
+   239→              <CheckSquare className="mr-1.5 h-4 w-4" /> {bulkMode ? "Exit Bulk" : "Bulk Select"}
+   240→            </Button>
+   241→            <Button onClick={() => setCreateOpen(true)}>
+   242→              <Plus className="mr-2 h-4 w-4" /> New Enquiry
+   243→            </Button>
+   244→          </div>
+   245→        }
+   246→      />
+   247→
+   248→      {/* mini stats */}
+   249→      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+   250→        <KpiCard label="Total Enquiries" value={total} icon={Inbox} accent="blue" />
+   251→        <KpiCard label="Hot Leads" value={enquiries.filter((e: any) => e.status === "HOT").length} icon={Flame} accent="red" />
+   252→        <KpiCard label="Open Pipeline" value={enquiries.filter((e: any) => !["CONVERTED", "LOST"].includes(e.status)).length} icon={TrendingUp} accent="amber" />
+   253→        <KpiCard label="Converted" value={enquiries.filter((e: any) => e.status === "CONVERTED").length} icon={Calendar} accent="emerald" />
+   254→      </div>
+   255→
+   256→      {/* Saved Views bar */}
+   257→      <SavedViewsBar
+   258→        views={savedViews}
+   259→        activeViewId={activeViewId}
+   260→        onApply={applyView}
+   261→        onDelete={(id) => deleteViewMut.mutate(id)}
+   262→        onSetDefault={(id, isDefault) => setDefaultMut.mutate({ id, isDefault })}
+   263→        onSaveCurrent={() => setSaveViewOpen(true)}
+   264→        onClear={clearFilters}
+   265→        hasActiveFilters={activeFilters}
+   266→        currentFilters={{ status, search }}
+   267→      />
+   268→
+   269→      {/* Bulk actions toolbar */}
+   270→      {bulkMode && (
+   271→        <Card className="border-primary/30 bg-primary/5 p-3">
+   272→          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   273→            <div className="flex items-center gap-3">
+   274→              <Badge variant="secondary" className="font-semibold">{selectedIds.size} selected</Badge>
+   275→              <Button variant="ghost" size="sm" onClick={toggleAll} disabled={enquiries.length === 0}>
+   276→                {allOnPageSelected ? "Deselect page" : "Select page"}
+   277→              </Button>
+   278→              {selectedIds.size > 0 && (
+   279→                <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+   280→                  <X className="mr-1 h-3.5 w-3.5" /> Clear
+   281→                </Button>
+   282→              )}
+   283→            </div>
+   284→            {selectedIds.size > 0 && (
+   285→              <div className="flex flex-wrap items-center gap-2">
+   286→                <DropdownMenu>
+   287→                  <DropdownMenuTrigger asChild>
+   288→                    <Button variant="outline" size="sm" disabled={bulkStatusMut.isPending}>
+   289→                      {bulkStatusMut.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="mr-1.5 h-3.5 w-3.5" />}
+   290→                      Set Status <ChevronDown className="ml-1 h-3 w-3" />
+   291→                    </Button>
+   292→                  </DropdownMenuTrigger>
+   293→                  <DropdownMenuContent>
+   294→                    <DropdownMenuLabel>Change status for {selectedIds.size} enquiries</DropdownMenuLabel>
+   295→                    <DropdownMenuSeparator />
+   296→                    {STATUSES.filter((s) => s !== "all").map((s) => (
+   297→                      <DropdownMenuItem key={s} onClick={() => bulkStatusMut.mutate({ ids: [...selectedIds], newStatus: s })}>
+   298→                        <span className="capitalize">{s}</span>
+   299→                      </DropdownMenuItem>
+   300→                    ))}
+   301→                  </DropdownMenuContent>
+   302→                </DropdownMenu>
+   303→                <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700" onClick={() => setBulkDeleteOpen(true)}>
+   304→                  <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Request Delete
+   305→                </Button>
+   306→              </div>
+   307→            )}
+   308→          </div>
+   309→        </Card>
+   310→      )}
+   311→
+   312→      {/* filters */}
+   313→      <Card className="p-4">
+   314→        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+   315→          <Tabs value={status} onValueChange={(v) => { setStatus(v); setPage(1); setActiveViewId(null); }}>
+   316→            <TabsList className="flex h-auto flex-wrap gap-1 bg-muted/60">
+   317→              {STATUSES.map((s) => (
+   318→                <TabsTrigger key={s} value={s} className="text-xs capitalize">
+   319→                  {s === "all" ? "All" : s}
+   320→                </TabsTrigger>
+   321→              ))}
+   322→            </TabsList>
+   323→          </Tabs>
+   324→          <div className="relative w-full lg:w-72">
+   325→            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   326→            <Input
+   327→              placeholder="Search company, contact, mobile…"
+   328→              value={search}
+   329→              onChange={(e) => { setSearch(e.target.value); setPage(1); setActiveViewId(null); }}
+   330→              className="pl-9"
+   331→            />
+   332→          </div>
+   333→        </div>
+   334→      </Card>
+   335→
+   336→      {/* list */}
+   337→      {isLoading ? (
+   338→        <Loading label="Loading enquiries…" />
+   339→      ) : enquiries.length === 0 ? (
+   340→        <EmptyState
+   341→          icon={Inbox}
+   342→          title="No enquiries found"
+   343→          description="Try adjusting your filters or create a new enquiry."
+   344→          action={<Button onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" /> New Enquiry</Button>}
+   345→        />
+   346→      ) : (
+   347→        <>
+   348→          <div className="grid gap-3">
+   349→            {enquiries.map((e: any) => {
+   350→              const isSelected = selectedIds.has(e.id);
+   351→              return (
+   352→                <div
+   353→                  key={e.id}
+   354→                  className={cn(
+   355→                    "group relative rounded-xl border bg-card p-4 transition",
+   356→                    bulkMode && isSelected ? "border-primary ring-1 ring-primary/30" : "border-border",
+   357→                    bulkMode ? "cursor-default" : "cursor-pointer hover:border-primary/40 hover:shadow-md"
+   358→                  )}
+   359→                  onClick={() => { if (!bulkMode) openEnquiry(e.id); }}
+   360→                >
+   361→                  {bulkMode && (
+   362→                    <div className="absolute left-3 top-1/2 -translate-y-1/2 z-10">
+   363→                      <Checkbox
+   364→                        checked={isSelected}
+   365→                        onCheckedChange={() => toggleOne(e.id)}
+   366→                        onClick={(ev) => ev.stopPropagation()}
+   367→                        aria-label={`Select ${e.company}`}
+   368→                      />
+   369→                    </div>
+   370→                  )}
+   371→                  <div className={cn("flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between", bulkMode && "pl-8")}>
+   372→                    <div className="flex items-start gap-3">
+   373→                      <div className="shrink-0 rounded-lg bg-primary/10 p-2.5 text-primary ring-1 ring-primary/15">
+   374→                        <Building2 className="h-5 w-5" />
+   375→                      </div>
+   376→                      <div className="min-w-0">
+   377→                        <div className="flex flex-wrap items-center gap-2">
+   378→                          <p className="font-semibold text-foreground">{e.company}</p>
+   379→                          <StatusBadge status={e.status} />
+   380→                          {e.leadScore >= 70 && <Badge className="bg-red-500/15 text-red-600 dark:text-red-400"><Flame className="mr-1 h-3 w-3" />{e.leadScore}</Badge>}
+   381→                        </div>
+   382→                        <p className="mt-0.5 text-sm text-muted-foreground">
+   383→                          {e.enquiryNumber} · {e.contactPerson} · <span className="font-medium">{e.productInterested}</span>
+   384→                        </p>
+   385→                        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+   386→                          <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{e.mobile}</span>
+   387→                          {e.city && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{e.city}</span>}
+   388→                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{fmtDate(e.date)}</span>
+   389→                          {e.budget && <span className="flex items-center gap-1"><IndianRupee className="h-3 w-3" />{fmtINR(e.budget)}</span>}
+   390→                        </div>
+   391→                      </div>
+   392→                    </div>
+   393→                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+   394→                      <div className="text-center">
+   395→                        <p className="font-semibold text-foreground">{e._count?.followUps || 0}</p>
+   396→                        <p>Follow-ups</p>
+   397→                      </div>
+   398→                      <div className="text-center">
+   399→                        <p className="font-semibold text-foreground">{e._count?.quotations || 0}</p>
+   400→                        <p>Quotations</p>
+   401→                      </div>
+   402→                      <div className="hidden text-center sm:block">
+   403→                        <p className="font-semibold text-foreground">{e.assignedExecutive?.name?.split(" ")[0] || "—"}</p>
+   404→                        <p>Executive</p>
+   405→                      </div>
+   406→                      {!bulkMode && <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-1 group-hover:text-primary" />}
+   407→                    </div>
+   408→                  </div>
+   409→                </div>
+   410→              );
+   411→            })}
+   412→          </div>
+   413→
+   414→          {/* pagination */}
+   415→          {totalPages > 1 && (
+   416→            <div className="flex items-center justify-between">
+   417→              <p className="text-xs text-muted-foreground">Page {page} of {totalPages} · {total} enquiries</p>
+   418→              <div className="flex gap-2">
+   419→                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+   420→                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+   421→              </div>
+   422→            </div>
+   423→          )}
+   424→        </>
+   425→      )}
+   426→
+   427→      {/* create dialog */}
+   428→      <CreateEnquiryDialog
+   429→        open={createOpen}
+   430→        onOpenChange={setCreateOpen}
+   431→        products={productsData?.products || []}
+   432→        users={usersData?.users || []}
+   433→        role={role}
+   434→        currentUserId={(session?.user as any)?.id}
+   435→        onCreated={(id) => { setCreateOpen(false); openEnquiry(id); }}
+   436→      />
+   437→
+   438→      {/* detail */}
+   439→      <EnquiryDetail enquiryId={selected} onClose={() => openEnquiry(null)} />
+   440→
+   441→      {/* Save View Dialog */}
+   442→      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+   443→        <DialogContent className="sm:max-w-md">
+   444→          <DialogHeader>
+   445→            <DialogTitle className="flex items-center gap-2"><Save className="h-5 w-5 text-primary" /> Save Current View</DialogTitle>
+   446→            <DialogDescription>Save the current filter state as a reusable preset.</DialogDescription>
+   447→          </DialogHeader>
+   448→          <SaveViewForm
+   449→            currentFilters={{ status, search }}
+   450→            isDefault={savedViews.length === 0}
+   451→            onSave={(name, isDefault) => saveViewMut.mutate({ name, entity: "ENQUIRY", filters: { status, search }, isDefault })}
+   452→            loading={saveViewMut.isPending}
+   453→          />
+   454→        </DialogContent>
+   455→      </Dialog>
+   456→
+   457→      {/* Bulk Delete Dialog */}
+   458→      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+   459→        <DialogContent className="sm:max-w-md">
+   460→          <DialogHeader>
+   461→            <DialogTitle className="flex items-center gap-2 text-red-600"><AlertTriangle className="h-5 w-5" /> Request Bulk Deletion</DialogTitle>
+   462→            <DialogDescription>
+   463→              This will submit deletion requests for <strong>{selectedIds.size}</strong> enquiries. An admin must approve each request before deletion occurs.
+   464→            </DialogDescription>
+   465→          </DialogHeader>
+   466→          <div className="space-y-2 py-2">
+   467→            <Label>Reason for deletion *</Label>
+   468→            <Textarea
+   469→              value={bulkDeleteReason}
+   470→              onChange={(e) => setBulkDeleteReason(e.target.value)}
+   471→              placeholder="e.g. Duplicate entries, test data, outdated records…"
+   472→              rows={3}
+   473→            />
+   474→          </div>
+   475→          <DialogFooter>
+   476→            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>Cancel</Button>
+   477→            <Button
+   478→              variant="destructive"
+   479→              disabled={!bulkDeleteReason.trim() || bulkDeleteMut.isPending}
+   480→              onClick={() => bulkDeleteMut.mutate({ ids: [...selectedIds], reason: bulkDeleteReason.trim() })}
+   481→            >
+   482→              {bulkDeleteMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+   483→              Submit {selectedIds.size} Deletion Requests
+   484→            </Button>
+   485→          </DialogFooter>
+   486→        </DialogContent>
+   487→      </Dialog>
+   488→    </div>
+   489→  );
+   490→}
+   491→
+   492→/* ============ Saved Views Bar ============ */
+   493→function SavedViewsBar({
+   494→  views, activeViewId, onApply, onDelete, onSetDefault, onSaveCurrent, onClear, hasActiveFilters, currentFilters,
+   495→}: {
+   496→  views: any[];
+   497→  activeViewId: string | null;
+   498→  onApply: (v: any) => void;
+   499→  onDelete: (id: string) => void;
+   500→  onSetDefault: (id: string, isDefault: boolean) => void;
+   501→  onSaveCurrent: () => void;
+   502→  onClear: () => void;
+   503→  hasActiveFilters: boolean;
+   504→  currentFilters: { status: string; search: string };
+   505→}) {
+   506→  const activeView = views.find((v) => v.id === activeViewId);
+   507→  return (
+   508→    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+   509→      <div className="flex flex-wrap items-center gap-1.5">
+   510→        <span className="mr-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+   511→          <Bookmark className="h-3.5 w-3.5" /> Views
+   512→        </span>
+   513→        {views.length === 0 ? (
+   514→          <span className="text-xs text-muted-foreground italic">No saved views yet</span>
+   515→        ) : (
+   516→          views.map((v) => (
+   517→            <div key={v.id} className="group relative">
+   518→              <button
+   519→                onClick={() => onApply(v)}
+   520→                className={cn(
+   521→                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition",
+   522→                  v.id === activeViewId
+   523→                    ? "border-primary bg-primary/10 text-primary"
+   524→                    : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+   525→                )}
+   526→                title={v.isDefault ? "Default view" : `Apply "${v.name}"`}
+   527→              >
+   528→                {v.isDefault && <BookmarkCheck className="h-3 w-3 text-primary" />}
+   529→                {v.name}
+   530→              </button>
+   531→              {/* Per-view actions dropdown on hover */}
+   532→              <DropdownMenu>
+   533→                <DropdownMenuTrigger asChild>
+   534→                  <button
+   535→                    className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border bg-background text-muted-foreground group-hover:flex hover:text-foreground"
+   536→                    aria-label={`Options for ${v.name}`}
+   537→                  >
+   538→                    <ChevronDown className="h-3 w-3" />
+   539→                  </button>
+   540→                </DropdownMenuTrigger>
+   541→                <DropdownMenuContent align="start" className="w-44">
+   542→                  <DropdownMenuItem onClick={() => onApply(v)}>
+   543→                    <Bookmark className="mr-2 h-3.5 w-3.5" /> Apply
+   544→                  </DropdownMenuItem>
+   545→                  <DropdownMenuItem onClick={() => onSetDefault(v.id, !v.isDefault)}>
+   546→                    <BookmarkCheck className="mr-2 h-3.5 w-3.5" /> {v.isDefault ? "Unset default" : "Set as default"}
+   547→                  </DropdownMenuItem>
+   548→                  <DropdownMenuSeparator />
+   549→                  <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => onDelete(v.id)}>
+   550→                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+   551→                  </DropdownMenuItem>
+   552→                </DropdownMenuContent>
+   553→              </DropdownMenu>
+   554→            </div>
+   555→          ))
+   556→        )}
+   557→      </div>
+   558→      <div className="flex items-center gap-1.5">
+   559→        <Button variant="outline" size="sm" onClick={onSaveCurrent} disabled={!hasActiveFilters && views.length > 0}>
+   560→          <Save className="mr-1.5 h-3.5 w-3.5" /> Save View
+   561→        </Button>
+   562→        {hasActiveFilters && (
+   563→          <Button variant="ghost" size="sm" onClick={onClear}>
+   564→            <X className="mr-1.5 h-3.5 w-3.5" /> Clear
+   565→          </Button>
+   566→        )}
+   567→      </div>
+   568→    </div>
+   569→  );
+   570→}
+   571→
+   572→/* ============ Save View Form ============ */
+   573→function SaveViewForm({
+   574→  currentFilters, isDefault, onSave, loading,
+   575→}: {
+   576→  currentFilters: { status: string; search: string };
+   577→  isDefault: boolean;
+   578→  onSave: (name: string, isDefault: boolean) => void;
+   579→  loading: boolean;
+   580→}) {
+   581→  const [name, setName] = useState("");
+   582→  const [makeDefault, setMakeDefault] = useState(isDefault);
+   583→
+   584→  const summary = [
+   585→    currentFilters.status !== "all" ? `Status: ${currentFilters.status}` : null,
+   586→    currentFilters.search ? `Search: "${currentFilters.search}"` : null,
+   587→  ].filter(Boolean).join(" · ") || "All enquiries (no filters)";
+   588→
+   589→  return (
+   590→    <div className="space-y-3 py-2">
+   591→      <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+   592→        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Current filters</p>
+   593→        <p className="mt-0.5 text-sm text-foreground">{summary}</p>
+   594→      </div>
+   595→      <div className="space-y-1.5">
+   596→        <Label>View name *</Label>
+   597→        <Input
+   598→          value={name}
+   599→          onChange={(e) => setName(e.target.value)}
+   600→          placeholder="e.g. Hot Leads This Month"
+   601→          autoFocus
+   602→        />
+   603→      </div>
+   604→      <div className="flex items-center gap-2">
+   605→        <Checkbox
+   606→          id="make-default"
+   607→          checked={makeDefault}
+   608→          onCheckedChange={(v) => setMakeDefault(v === true)}
+   609→        />
+   610→        <Label htmlFor="make-default" className="cursor-pointer text-sm font-normal">
+   611→          Set as default view (auto-applies on page load)
+   612→        </Label>
+   613→      </div>
+   614→      <DialogFooter>
+   615→        <Button
+   616→          onClick={() => onSave(name.trim(), makeDefault)}
+   617→          disabled={!name.trim() || loading}
+   618→        >
+   619→          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save View
+   620→        </Button>
+   621→      </DialogFooter>
+   622→    </div>
+   623→  );
+   624→}
+   625→
+   626→/* ============ Create Enquiry Dialog ============ */
+   627→function CreateEnquiryDialog({
+   628→  open, onOpenChange, products, users, role, currentUserId, onCreated,
+   629→}: {
+   630→  open: boolean;
+   631→  onOpenChange: (o: boolean) => void;
+   632→  products: any[];
+   633→  users: any[];
+   634→  role: string;
+   635→  currentUserId?: string;
+   636→  onCreated: (id: string) => void;
+   637→}) {
+   638→  const qc = useQueryClient();
+   639→  const [form, setForm] = useState<any>({
+   640→    source: "WEBSITE", company: "", contactPerson: "", mobile: "", email: "",
+   641→    productInterested: "", productId: "", budget: "", city: "", state: "",
+   642→    specification: "", remarks: "", assignedTo: currentUserId || "", nextFollowUpDate: "",
+   643→  });
+   644→  const [dupWarn, setDupWarn] = useState(false);
+   645→
+   646→  const execs = users.filter((u) => u.role === "EXECUTIVE" && u.active);
+   647→  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+   648→
+   649→  const mutation = useMutation({
+   650→    mutationFn: (payload: any) => api<any>("/api/enquiries", { method: "POST", body: JSON.stringify(payload) }),
+   651→    onSuccess: (data) => {
+   652→      toast.success(`Enquiry ${data.enquiry.enquiryNumber} created`);
+   653→      if (data.duplicate) toast.warning("⚠️ Possible duplicate detected — this customer may already exist.");
+   654→      qc.invalidateQueries({ queryKey: ["enquiries"] });
+   655→      qc.invalidateQueries({ queryKey: ["dashboard"] });
+   656→      onCreated(data.enquiry.id);
+   657→      setForm({ source: "WEBSITE", company: "", contactPerson: "", mobile: "", email: "", productInterested: "", productId: "", budget: "", city: "", state: "", specification: "", remarks: "", assignedTo: currentUserId || "", nextFollowUpDate: "" });
+   658→    },
+   659→    onError: (e: any) => toast.error(e.message || "Failed to create enquiry"),
+   660→  });
+   661→
+   662→  const submit = () => {
+   663→    if (!form.company || !form.contactPerson || !form.mobile || !form.productInterested) {
+   664→      toast.error("Please fill all mandatory fields (Company, Contact, Mobile, Product).");
+   665→      return;
+   666→    }
+   667→    mutation.mutate(form);
+   668→  };
+   669→
+   670→  return (
+   671→    <Dialog open={open} onOpenChange={onOpenChange}>
+   672→      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+   673→        <DialogHeader>
+   674→          <DialogTitle className="flex items-center gap-2"><Plus className="h-5 w-5 text-primary" /> New Enquiry</DialogTitle>
+   675→          <DialogDescription>Capture a new customer enquiry. Fields marked * are mandatory.</DialogDescription>
+   676→        </DialogHeader>
+   677→
+   678→        <div className="grid gap-4 py-2 sm:grid-cols-2">
+   679→          <div className="space-y-1.5">
+   680→            <Label>Source *</Label>
+   681→            <Select value={form.source} onValueChange={(v) => set("source", v)}>
+   682→              <SelectTrigger><SelectValue /></SelectTrigger>
+   683→              <SelectContent>{SOURCES.map((s) => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}</SelectContent>
+   684→            </Select>
+   685→          </div>
+   686→          <div className="space-y-1.5">
+   687→            <Label>Product Interested *</Label>
+   688→            <Select value={form.productId} onValueChange={(v) => { const p = products.find((x) => x.id === v); set("productId", v); set("productInterested", p?.name || ""); }}>
+   689→              <SelectTrigger><SelectValue placeholder="Select product" /></SelectTrigger>
+   690→              <SelectContent className="max-h-60">
+   691→                {products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+   692→              </SelectContent>
+   693→            </Select>
+   694→          </div>
+   695→          <div className="space-y-1.5 sm:col-span-2">
+   696→            <Label>Company Name *</Label>
+   697→            <Input value={form.company} onChange={(e) => set("company", e.target.value)} placeholder="e.g. Tata Steel Ltd." />
+   698→          </div>
+   699→          <div className="space-y-1.5">
+   700→            <Label>Contact Person *</Label>
+   701→            <Input value={form.contactPerson} onChange={(e) => set("contactPerson", e.target.value)} placeholder="e.g. Rajesh Kumar" />
+   702→          </div>
+   703→          <div className="space-y-1.5">
+   704→            <Label>Mobile Number *</Label>
+   705→            <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="10-digit mobile" maxLength={15} />
+   706→          </div>
+   707→          <div className="space-y-1.5">
+   708→            <Label>Email</Label>
+   709→            <Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="contact@company.com" />
+   710→          </div>
+   711→          <div className="space-y-1.5">
+   712→            <Label>Budget (₹)</Label>
+   713→            <Input type="number" value={form.budget} onChange={(e) => set("budget", e.target.value)} placeholder="e.g. 500000" />
+   714→          </div>
+   715→          <div className="space-y-1.5">
+   716→            <Label>City</Label>
+   717→            <Input value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="e.g. Pune" />
+   718→          </div>
+   719→          <div className="space-y-1.5">
+   720→            <Label>State</Label>
+   721→            <Input value={form.state} onChange={(e) => set("state", e.target.value)} placeholder="e.g. Maharashtra" />
+   722→          </div>
+   723→          <div className="space-y-1.5">
+   724→            <Label>Assigned Executive</Label>
+   725→            <Select value={form.assignedTo} onValueChange={(v) => set("assignedTo", v)}>
+   726→              <SelectTrigger><SelectValue placeholder="Assign to…" /></SelectTrigger>
+   727→              <SelectContent>
+   728→                {execs.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+   729→                {role !== "EXECUTIVE" && users.filter((u) => u.role === "MANAGER").map((u) => <SelectItem key={u.id} value={u.id}>{u.name} (Manager)</SelectItem>)}
+   730→              </SelectContent>
+   731→            </Select>
+   732→          </div>
+   733→          <div className="space-y-1.5">
+   734→            <Label>Next Follow-Up Date</Label>
+   735→            <Input type="date" value={form.nextFollowUpDate} onChange={(e) => set("nextFollowUpDate", e.target.value)} />
+   736→          </div>
+   737→          <div className="space-y-1.5 sm:col-span-2">
+   738→            <Label>Specification / Requirements</Label>
+   739→            <Textarea value={form.specification} onChange={(e) => set("specification", e.target.value)} placeholder="Technical specs, quantity, special requirements…" rows={2} />
+   740→          </div>
+   741→          <div className="space-y-1.5 sm:col-span-2">
+   742→            <Label>Remarks</Label>
+   743→            <Textarea value={form.remarks} onChange={(e) => set("remarks", e.target.value)} placeholder="Any additional notes…" rows={2} />
+   744→          </div>
+   745→        </div>
+   746→
+   747→        {dupWarn && (
+   748→          <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+   749→            <AlertTriangle className="h-4 w-4" /> This customer may already exist. Please verify before saving.
+   750→          </div>
+   751→        )}
+   752→
+   753→        <DialogFooter>
+   754→          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+   755→          <Button onClick={submit} disabled={mutation.isPending}>
+   756→            {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Create Enquiry
+   757→          </Button>
+   758→        </DialogFooter>
+   759→      </DialogContent>
+   760→    </Dialog>
+   761→  );
+   762→}
+   763→

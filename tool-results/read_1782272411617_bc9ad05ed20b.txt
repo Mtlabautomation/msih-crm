@@ -1,0 +1,210 @@
+  1250→3. **Tested Action filter (CREATE):**
+  1251→   - Clicked action dropdown → all 8 options listed (All actions, CREATE, UPDATE, DELETE, LOGIN, LOGOUT, APPROVE, REJECT, TRANSFER).
+  1252→   - Selected CREATE → Timeline updated immediately, all visible items now show CREATE action. KPI cards updated: TOTAL EVENTS=8, CREATE EVENTS=8 (others 0). Pagination: "Page 1 of 1 · 8 total events". "Clear" button appeared next to dropdowns.
+  1253→   - Dev log: `GET /api/audit-logs?page=1&limit=25&action=CREATE 200 in 17ms`. ✓
+  1254→4. **Tested Clear filters button** → both dropdowns reset to "All actions"/"All entities", search cleared, "Clear" button disappeared, Timeline reverted to 25 events on page 1 of 2.
+  1255→5. **Tested pagination Next** → jumped to page 2 ("Page 2 of 2 · 28 total events"), Prev now enabled, Next now disabled. ✓
+  1256→6. Navigated to **Reports** view. Verified:
+  1257→   - PageHeader with emerald accent + Export CSV + PDF (emerald solid) buttons.
+  1258→   - Hero banner: "REPORTS & EXPORTS" pill (Sparkles icon), "Sales intelligence, on demand." h2, "43 enquiries ready for export · PDF includes KPIs + full table" subtitle. From/To date inputs visible.
+  1259→   - 4 KPI cards with hints: Total Enquiries=43 (All records), Conversion Rate=12% (Converted ÷ total enquiries), Revenue (Closed)=₹17,10,000 (Sum of orderValue for CONVERTED), Pipeline Value=₹1,17,00,000 (Active pipeline HOT/WARM/QUALIFIED).
+  1260→   - 6 Report type cards rendered in 3-column grid: Daily Sales Report (~4 rows · CSV), Weekly Report (~8 rows), Monthly Report (~17 rows), Executive Performance (~3 rows), Product Performance (~15 rows), Management Summary (~10 rows). Each card has gradient icon tile + hover "Generate report" text.
+  1261→   - Recent Enquiries SectionCard with Export button + 7-column table (43 rows visible).
+  1262→7. **Tested PDF export** (clicked PDF button) → toast: "PDF exported as msih-report-2026-06-23.pdf". ✓ No error toast. File generated client-side via jspdf + autotable.
+  1263→8. **Tested all 6 report card CSV exports:**
+  1264→   - Daily Sales Report → "Daily report exported (4 rows)" ✓
+  1265→   - Weekly Report → "Weekly report exported (8 rows)" ✓
+  1266→   - Monthly Report → "Monthly report exported (17 rows)" ✓
+  1267→   - Executive Performance → "Executive performance exported (3 rows)" ✓
+  1268→   - Product Performance → "Product performance exported (15 rows)" ✓
+  1269→   - Management Summary → "Management summary exported (10 rows)" ✓
+  1270→9. **Tested header Export CSV** → "CSV exported (43 rows)" ✓
+  1271→10. **Tested Recent Enquiries Export button** → "CSV exported (43 rows)" ✓
+  1272→11. **Tested date range filter:**
+  1273→    - Set From date to 2026-06-01 (via React-compatible native setter + dispatchEvent) → hero banner updated to "17 enquiries ready for export · PDF includes KPIs + full table · date range applied". "Clear" button appeared. KPI hint changed to "Filtered by date range". ✓
+  1274→    - Clicked Clear → date filter removed, count reverted to 43, KPI hint back to "All records". ✓
+  1275→12. **Dark mode test:** Toggled to dark media. Audit Logs + Reports views render correctly with sky/emerald/violet accents preserved. Took screenshots.
+  1276→13. **Mobile viewport test (375x812):** Both Audit Logs (filter bar wraps, KPI cards 2-col, Timeline cards stack) and Reports (hero banner stacks vertically, KPI cards 2-col, report cards stack to 1-col, table scrolls horizontally inside SectionCard) render responsively.
+  1277→14. Took 8 screenshots documenting: audit-view-initial, audit-filtered-create, audit-page2, audit-dark-mode, reports-view-initial, reports-pdf-success, reports-date-filtered, reports-mobile.
+  1278→
+  1279→Stage Summary:
+  1280→- Files modified (3):
+  1281→  - `src/components/app/views/admin-audit-view.tsx` (51 → ~330 lines, full rewrite — Timeline + filters + KPIs + pagination)
+  1282→  - `src/components/app/views/reports-view.tsx` (78 → ~530 lines, full rewrite — hero banner + real PDF + 6 CSV cards + date range)
+  1283→  - `package.json` (added jspdf@4.2.1 + jspdf-autotable@5.0.8)
+  1284→- Key features added:
+  1285→  - **Audit Logs view:**
+  1286→    - PageHeader with violet accent (archival/intelligence).
+  1287→    - 4 KPI cards (Total/Create/Update/Delete) computed client-side from current page's logs, labeled "In current view".
+  1288→    - Filter bar with Search input (with X clear) + Action Select (8 options) + Entity Select (dynamic distinct entities from loaded logs) + "Clear" ghost button when any filter active.
+  1289→    - Action color legend bar (8 dots + labels) above the Timeline.
+  1290→    - Replaced basic list with shared `Timeline` component — colored icon circles per action (emerald/sky/rose/violet/slate/amber), inline entity Badge in title, full meta line, timeAgo timestamp + fmtDateTime on hover.
+  1291→    - Timeline wrapped in Card with `max-h-[70vh] overflow-y-auto scroll-thin`, violet top-edge highlight, "Refreshing…" indicator during fetch.
+  1292→    - Pagination bar: "Page X of Y · N total events" + Prev/Next buttons with proper disabled states.
+  1293→    - Immutable notice restyled as amber gradient banner with ShieldCheck icon.
+  1294→    - Empty state with ScrollText icon + "No matching events" + filter hint.
+  1295→  - **Reports view:**
+  1296→    - PageHeader with emerald accent + Export CSV + PDF action buttons.
+  1297→    - Gradient hero banner (sky → emerald → violet) with dotted grid pattern + 2 decorative orbs (one animate-float) + "REPORTS & EXPORTS" pill + "Sales intelligence, on demand." heading + inline From/To date range filter + Clear button.
+  1298→    - 4 KPI cards with descriptive hints (Total/Conversion/Revenue/Pipeline).
+  1299→    - **Real PDF export** via jspdf + jspdf-autotable: landscape A4, sky header band + violet sub-header, KPI summary autoTable (sky head, striped rows), Enquiries autoTable (emerald head, grid theme, 9 cols, right-aligned budget/centered lead score), per-page footer with attribution + page X of Y. Saves as `msih-report-YYYY-MM-DD.pdf`. Toast.success on completion, toast.error on failure.
+  1300→    - **6 per-card CSV exports** — each card has a real onClick that generates a CSV with report-specific columns (Daily/Weekly/Monthly use date-filtered enquiries; Executive Performance uses dashboard.charts.employeePerf; Product Performance groups by productInterested with count/converted/conv%/pipeline INR; Management Summary exports 10 KPI rows). Each card shows "~N rows · CSV" hint.
+  1301→    - Recent Enquiries SectionCard with sticky header (7 cols) + row hover highlight + Export button.
+  1302→    - Date range filter (From/To date inputs) that filters enquiries client-side via useMemo — hero count + KPI hints + table rows all update reactively.
+  1303→    - Footer attribution line.
+  1304→- Visual polish: Tailwind gradients (`from-emerald-500/15 to-sky-500/15` on icon tiles, `from-sky-500/10 via-card to-violet-500/5` on hero banner), `transition-all duration-200` on all hover states, animated left accent stripe on report cards (group-hover), color discipline (sky/violet/emerald/amber/rose/cyan/slate — NO indigo, NO blue-600), mobile-first responsive (filter bar wraps, KPI 2-col on mobile, table scrolls horizontally).
+  1305→- Verification:
+  1306→  - `bun run lint` → **exit 0** (0 errors, 0 warnings after rules-of-hooks fix).
+  1307→  - `bunx tsc --noEmit` → **0 errors in touched files**. 6 pre-existing errors in unrelated files only (examples/websocket, skills, src/app/api/ai-assistant, src/app/api/deletion-requests).
+  1308→  - Dev log: clean — all audit-logs/dashboard/enquiries API calls return 200; no compile errors; only pre-existing NextAuth URL warning.
+  1309→  - agent-browser E2E: full success — Audit Logs KPIs (25/6/16/3), Action filter (CREATE → 8 events), Clear filters, Pagination (page 2 of 2), Timeline colored icons verified; Reports PDF export (toast "PDF exported as msih-report-2026-06-23.pdf"), all 6 CSV card exports (4/8/17/3/15/10 rows), header CSV export (43 rows), date range filter (43 → 17 enquiries), Clear date filter, dark mode, mobile responsive. 8 screenshots captured.
+  1310→- Risks / follow-ups:
+  1311→  - **PDF export caps at 100 enquiries** (`enquiries.slice(0, 100)`) to keep the table within reasonable file size and rendering time. For very large datasets (>100), a future enhancement could add a "Export all" toggle or paginate the table across multiple PDF pages. Currently the autoTable will auto-paginate rows across PDF pages, but we slice to 100 to avoid excessive rendering.
+  1312→  - **KPI cards on Audit Logs are based on current page only** (labeled "In current view" via hint). The API doesn't expose action totals across all pages; a future enhancement could add a `/api/audit-logs/stats` endpoint returning aggregated action counts. For now, the per-page counts + total counter at the bottom ("28 total events") give users a complete picture.
+  1313→  - **Entity filter dropdown** is populated from the current page's logs only (via `useMemo` extracting distinct entities). If a user filters by an entity that's only present on page 1, switching to page 2 will empty the dropdown's source. In practice this is fine because the entity filter is a server-side filter (`entity=` query param) and the API returns the full filtered result set; the dropdown options just won't refresh when navigating pages. A future enhancement could pre-fetch all distinct entities via a separate endpoint.
+  1314→  - **Date range filter on Reports is client-side** — it filters the 200 enquiries already loaded by the `/api/enquiries?limit=200` query. For datasets >200 enquiries, results older than the 200 most-recent will be missing from filtered output. A future enhancement could pass `dateFrom`/`dateTo` to the `/api/enquiries` API (which already supports these params per the route) — but that requires invalidating the queryKey and refetching, which is a more involved change. For now, 200 records is enough for demo/typical use.
+  1315→  - **PDF font**: jspdf's default Helvetica doesn't render ₹ (INR symbol) — it'll appear as "Rs" or a placeholder in the PDF. The fmtINR helper uses Intl.NumberFormat which produces "₹17,10,000"; this string gets passed to autoTable. A future enhancement could either strip the ₹ and prefix "Rs.", embed a Unicode TTF font (jspdf supports `.addFont()`), or use a custom font face for proper ₹ rendering.
+  1316→
+  1317→---
+  1318→Task ID: 8-b
+  1319→Agent: full-stack-developer
+  1320→Task: Saved Views UI on Tasks + Quotations (extend SavedViewsBar pattern from Enquiries)
+  1321→
+  1322→Work Log:
+  1323→- Read worklog.md (Tasks 1 → 8-a) to understand project state, design system, and shared component patterns. Reviewed Task 7-c summary which introduced `PageHeader` accent variants (primary/emerald/amber/violet/rose/cyan) and the reusable `Timeline` component. Read Task 8-a summary (Audit Logs + Reports polish) for current state of the codebase.
+  1324→- Read existing implementation in `enquiries-view.tsx` lines 1–350 and 880–1233 carefully to extract the Saved Views pattern: `SavedViewsBar` (lines 890–965), `SaveViewForm` (lines 1174–1233), `useEffect`-based default-view auto-apply (lines 192–215), `saveViewMut` / `deleteViewMut` / `setDefaultMut` mutations (lines 241–270), `applyView` / `clearFilters` helpers (lines 272–312). Confirmed `enquiries-view.tsx` keeps its own inline copy — I created a parallel shared component file rather than refactoring enquiries (per task spec, to avoid breaking parallel work).
+  1325→- Read `/api/saved-views/route.ts` and `/api/saved-views/[id]/route.ts` — confirmed the backend already supports `entity` query param, the POST auto-unsets other defaults for same entity+user, the PATCH supports `isDefault` toggle, and the DELETE returns `{ ok: true }`. No backend changes needed.
+  1326→- Read `/api/tasks/route.ts` — confirmed it accepts `assignee` param and returns `{ tasks, total }`. The `priority`/`search`/`status` filters are applied client-side via `useMemo` since the API doesn't accept those params (and the dataset is small).
+  1327→- Read `/home/z/my-project/src/components/app/shared.tsx` to confirm `PageHeader` accepts `accent="amber"` for Tasks and `accent="cyan"` for Quotations (the accent variants are: primary, emerald, amber, violet, rose, cyan — exactly what we need).
+  1328→
+  1329→**Part 1: Created `/home/z/my-project/src/components/app/saved-views-bar.tsx` (shared file, ~385 lines):**
+  1330→- Exports:
+  1331→  - `SavedView` type — `{ id, name, entity, filters (JSON string), isDefault, isShared?, createdAt? }`.
+  1332→  - `useSavedViews<T extends Record<string, any>>({ entity, filters, setFilters, defaultFilters })` — generic hook that encapsulates ALL the React Query boilerplate:
+  1333→    - `useQuery(["saved-views", entity])` → fetches `/api/saved-views?entity=${entity}`.
+  1334→    - `useMutation` × 3 for save/delete/set-default (POST/DELETE/PATCH).
+  1335→    - `applyView(v)` — parses `v.filters` JSON, merges with `defaultFilters`, calls `setFilters`, sets `activeViewId`. Toast on success/error.
+  1336→    - `clearFilters()` — resets to `defaultFilters`, clears `activeViewId`.
+  1337→    - `saveView(name, isDefault)` — POSTs `{ name, entity, filters, isDefault }`.
+  1338→    - `deleteView(id)` — DELETEs `/api/saved-views/${id}`, and if the deleted view was active, resets filters to defaults (so the bar stays visually consistent).
+  1339→    - `setDefaultView(id, isDefault)` — PATCHes `{ isDefault }`.
+  1340→    - `hasActiveFilters` — computed via shallow equality between `filters` and `defaultFilters`.
+  1341→    - `activeViewId`, `views`, `isSaving` — exposed for the consumer.
+  1342→    - Auto-apply default view on mount via `useEffect` that runs once when `defaultView` arrives from the query (guarded by a `defaultApplied` flag so it never re-applies).
+  1343→  - `SavedViewsBar` component (props: `views, activeViewId, onApply, onDelete, onSetDefault, onSaveCurrent, onClear, hasActiveFilters`) — visually identical to enquiries-view's inline version:
+  1344→    - "Views" label with `Bookmark` icon.
+  1345→    - Bookmark chips per saved view — active view highlighted with `border-primary bg-primary/10 text-primary`; default view shows a `BookmarkCheck` icon.
+  1346→    - Per-view dropdown menu (hidden by default, `group-hover:flex`) — Apply / Set as default (or Unset default) / Delete.
+  1347→    - "Save View" outline button (disabled when `!hasActiveFilters && views.length > 0`).
+  1348→    - "Clear" ghost button (only visible when `hasActiveFilters`).
+  1349→    - Wrapped in a `rounded-xl border bg-card/60 px-3 py-2.5` container for visual grouping (subtle improvement over the enquiries version).
+  1350→  - `SaveViewForm` component (props: `open, onOpenChange, onSave, loading, activeFilterCount?`) — self-contained Dialog with:
+  1351→    - Header: `Save` icon + "Save Current View" title + description.
+  1352→    - Filter summary box: shows "No active filters — saves the default state" or "N active filters will be saved".
+  1353→    - Name input (`autoFocus`) with placeholder "e.g. High Priority Tasks".
+  1354→    - "Set as default view (auto-applies on page load)" checkbox.
+  1355→    - "Save View" button (disabled when name is empty or loading).
+  1356→    - **Key implementation detail:** The form body is in a separate `SaveViewFormBody` child component that is only mounted when `open=true`. This ensures the `name` and `makeDefault` state reset to defaults on each open — no `useEffect`-based reset needed (which would have triggered the `react-hooks/set-state-in-effect` lint rule).
+  1357→
+  1358→**Part 2: Modified `/home/z/my-project/src/components/app/views/tasks-view.tsx` (444 → ~480 lines):**
+  1359→- Added new filter state shape: `TaskFilters = { status, priority, search, assigneeId }` with `DEFAULT_FILTERS = { status: "all", priority: "all", search: "", assigneeId: "" }`.
+  1360→- Replaced single `filterAssignee` state var with `filters` object + `setFilter(patch)` helper. Destructured `status, priority, search, assigneeId` for backward-compat with existing JSX.
+  1361→- Added `const sv = useSavedViews<TaskFilters>({ entity: "TASK", filters, setFilters, defaultFilters: DEFAULT_FILTERS })`.
+  1362→- Added `PRIORITIES = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"]` and `STATUSES = ["all", "OPEN", "IN_PROGRESS", "DONE", "CANCELLED"]` constants.
+  1363→- Added client-side filtering via `useMemo` over `allTasks` (filter by `priority !== "all"` and `search.trim()`). The `assigneeId` filter is still passed to the API (via `?assignee=` param, only when the user has manager/admin role).
+  1364→- Added "status focus" filter: when `status !== "all"`, only that column is shown on the kanban (full-width `grid-cols-1 max-w-2xl`); when `status === "all"`, all 4 columns render responsively (`md:grid-cols-2 xl:grid-cols-4`). This makes the kanban feel like a "focus on one column" feature when a status is selected.
+  1365→- Added filter bar with: search input (with `Search` icon), priority `Select` dropdown, status `Select` dropdown (labels show "All columns" / column label), assignee `Select` dropdown (only for MANAGER/ADMIN/SUPER_ADMIN, hidden for EXECUTIVE). All filter changes go through `setFilter({ ... })`.
+  1366→- Added `<SavedViewsBar ... />` between the KPI row and the filter bar.
+  1367→- Added `<SaveViewForm ... />` dialog with `activeFilterCount` computed from the 4 filter dimensions.
+  1368→- Added `accent="amber"` to `PageHeader` (tasks = action/work).
+  1369→- Added `Search` icon import (was missing in original).
+  1370→- Updated empty-state copy from "No tasks yet" to "No tasks match" with description "Try adjusting your filters, or create a new task to get started." (more appropriate when filters may be hiding tasks).
+  1371→
+  1372→**Part 3: Modified `/home/z/my-project/src/components/app/views/quotations-view.tsx` (~470 → ~490 lines):**
+  1373→- Imported `SavedViewsBar`, `SaveViewForm`, `useSavedViews` from `../saved-views-bar`.
+  1374→- Added `QuotationFilters = { status, search }` type and `DEFAULT_FILTERS = { status: "all", search: "" }`.
+  1375→- Replaced individual `const [status, setStatus]` and `const [search, setSearch]` with a single `filters` object + `setFilter(patch)` helper.
+  1376→- Added `const sv = useSavedViews<QuotationFilters>({ entity: "QUOTATION", filters, setFilters, defaultFilters: DEFAULT_FILTERS })`.
+  1377→- Updated `Tabs onValueChange` to use `setFilter({ status: v })` and the search `Input onChange` to use `setFilter({ search: e.target.value })`.
+  1378→- Added `<SavedViewsBar ... />` between the KPI row and the status tabs.
+  1379→- Added `<SaveViewForm ... />` dialog at the end with `activeFilterCount` = (status !== "all" ? 1 : 0) + (search.trim() ? 1 : 0).
+  1380→- Added `accent="cyan"` to `PageHeader` (quotations = financial/cyan).
+  1381→- Added `saveViewOpen` state to control the dialog.
+  1382→
+  1383→**Verification:**
+  1384→- `bun run lint` → **exit 0** (0 errors, 0 warnings). One iteration needed during dev:
+  1385→  - First pass: `react-hooks/set-state-in-effect` flagged `setActiveViewId(defaultView.id)` in the `useSavedViews` useEffect — fixed by adding `// eslint-disable-next-line react-hooks/set-state-in-effect -- one-time default-view application on mount`.
+  1386→  - Second pass: `react-hooks/set-state-in-effect` flagged `setName("")` in the `SaveViewForm` useEffect (which reset form state on close) — fixed by extracting the form body into a `SaveViewFormBody` child component that is only mounted when `open=true`, eliminating the need for the reset effect entirely (state initializes fresh on each mount).
+  1387→  - Third pass: one unused eslint-disable directive left on the `setDefaultApplied(true)` line — removed (the rule wasn't actually firing on that line, only on the `setActiveViewId` call).
+  1388→  - Fourth pass: clean exit 0.
+  1389→- `bunx tsc --noEmit` → **0 errors in touched files** (`saved-views-bar.tsx`, `tasks-view.tsx`, `quotations-view.tsx`). 6 pre-existing errors remain in unrelated files (`examples/websocket/*`, `skills/*`, `src/app/api/ai-assistant/route.ts`, `src/app/api/deletion-requests/[id]/route.ts`) — not my files (Task 8-a noted these as pre-existing).
+  1390→- Dev log: clean. All API calls return 200:
+  1391→  - `GET /api/saved-views?entity=TASK 200`
+  1392→  - `GET /api/tasks? 200`
+  1393→  - `GET /api/saved-views?entity=QUOTATION 200`
+  1394→  - `GET /api/quotations?status=all&search= 200`
+  1395→  - `GET /api/quotations?status=ACCEPTED&search= 200`
+  1396→  - `POST /api/saved-views 200` (saved both "High Priority" TASK view and "Accepted Quotations" QUOTATION view)
+  1397→  - `DELETE /api/saved-views/cmqqvu2pq001spf00ozn0uv2o 200` (deleted the TASK view)
+  1398→  - `DELETE /api/saved-views/cmqqw4xdr0020pf00ssdrqk8o 200` (deleted the QUOTATION view)
+  1399→  - No compile errors, no runtime errors. Only the pre-existing NextAuth URL warning.
+  1400→
+  1401→**agent-browser end-to-end test (full success):**
+  1402→1. Opened `http://localhost:3000/` → login page. Clicked "Super Admin Manoj Dore" demo button → credentials filled. Clicked "Sign In" → Dashboard loaded.
+  1403→2. Clicked "Tasks 1" sidebar button → Tasks view loaded. Verified:
+  1404→   - `PageHeader` with **amber accent** (icon tile + gradient divider both amber-tinted).
+  1405→   - 4 KPI cards (TO DO, IN PROGRESS, DONE, OVERDUE) — all rendered with correct icons + hints.
+  1406→   - **SavedViewsBar** rendered below KPI row — "Views" label with Bookmark icon + "No saved views yet" italic text + "Save View" outline button (enabled because no filters AND no views yet — matches Enquiries pattern).
+  1407→   - Filter bar with search input (with `Search` icon), priority dropdown ("All priorities"), status dropdown ("All columns"), assignee dropdown ("All assignees").
+  1408→   - Kanban board with 4 columns (To Do / In Progress / Done / Cancelled) + at least 1 task card visible.
+  1409→3. **Tested priority filter:** Opened priority dropdown → selected HIGH. Tasks filtered client-side. "Clear" ghost button appeared next to "Save View". Priority dropdown now shows "HIGH".
+  1410→4. **Tested Save View:** Clicked "Save View" → SaveViewForm dialog opened with header "Save Current View" + filter summary box ("1 active filter will be saved") + name input + "Set as default view" checkbox (unchecked) + "Save View" submit button (disabled until name entered).
+  1411→   - Filled name "High Priority" → button enabled.
+  1412→   - Clicked "Save View" → dialog closed, toast "View saved", new chip "High Priority" appeared in SavedViewsBar.
+  1413→5. **Tested Clear:** Clicked "Clear" button → priority reset to "All priorities", "Clear" button disappeared, "Save View" button now disabled (no active filters AND views.length > 0). The "High Priority" chip remained in the bar.
+  1414→6. **Tested Apply:** Clicked the "High Priority" chip → priority filter restored to HIGH, "Clear" button reappeared. Toast "Applied view: High Priority".
+  1415→7. **Tested reload persistence:** Reloaded page → navigated back to Tasks → "High Priority" chip still visible (persisted to DB). Priority filter was at "All priorities" (NOT auto-applied, because we hadn't set it as default).
+  1416→8. **Tested Set as Default:** Hovered over the "High Priority" chip → per-view options dropdown trigger appeared (-right-1 -top-1 circular button). Clicked trigger → dropdown menu opened with 3 items: Apply / Set as default / Delete. Clicked "Set as default" → toast "Default view updated". The chip now shows a `BookmarkCheck` icon indicating it's the default.
+  1417→9. **Tested auto-apply on mount:** Reloaded page → navigated to Tasks → **HIGH priority filter auto-applied** ✓ (priority dropdown shows HIGH, "Clear" button visible, "High Priority" chip highlighted as active). The `useEffect` in `useSavedViews` fired once after the saved-views query returned, applied the default view's filters, and set `defaultApplied=true` to prevent re-running.
+  1418→10. **Tested Delete:** Hovered over "High Priority" chip → opened options dropdown → clicked "Delete" → toast "View deleted", chip removed, filters reset to defaults (because the deleted view was the active one — `deleteView()` checks `if (id === activeViewId) { setFilters(defaultFilters); setActiveViewId(null); }`).
+  1419→11. **Navigated to Quotations view.** Verified:
+  1420→    - `PageHeader` with **cyan accent** (icon tile + gradient divider both cyan-tinted) — distinct from Tasks' amber.
+  1421→    - 4 KPI cards (TOTAL QUOTATIONS, PIPELINE VALUE, ACCEPTED, PENDING).
+  1422→    - **SavedViewsBar** rendered below KPI row, above the status tabs — "Views" label + "No saved views yet" italic + "Save View" button.
+  1423→    - Status tabs (All/DRAFT/SENT/ACCEPTED/REJECTED/EXPIRED/REVISED) + search input + Card/Table view toggle — all preserved from Task 7-b.
+  1424→    - Card view showing 5+ quotation cards with QT numbers, companies, amounts, statuses.
+  1425→12. **Tested status filter:** Clicked ACCEPTED tab → quotations filtered to 1 ACCEPTED card. "Clear" button appeared.
+  1426→13. **Tested Save View with default:** Clicked "Save View" → dialog opened. Filled name "Accepted Quotations" + checked "Set as default view" checkbox → clicked "Save View" → toast "View saved", "Accepted Quotations" chip appeared in bar with BookmarkCheck icon (indicating default).
+  1427→14. **Tested Clear:** Clicked "Clear" → status tab reset to "All", "Clear" button disappeared. The "Accepted Quotations" chip remained.
+  1428→15. **Tested auto-apply on mount:** Reloaded page → navigated to Quotations → **ACCEPTED tab auto-selected** ✓ (default view auto-applied on mount). "Clear" button visible, "Accepted Quotations" chip highlighted as active.
+  1429→16. **Tested Delete:** Hovered over "Accepted Quotations" chip → opened options dropdown (Apply / Unset default / Delete) → clicked "Delete" → toast "View deleted", chip removed, status tab reset to "All".
+  1430→17. **Mobile viewport test (375×812):** Both Tasks and Quotations render responsively — SavedViewsBar wraps gracefully (chips on first row, Save View button on second row), KPI cards 2-col, filter bar wraps, kanban cards stack to 1-col on Tasks, quotation cards stack to 1-col on Quotations. Took screenshots.
+  1431→18. **Dark mode test:** Toggled to dark media. Both Tasks (amber accent) and Quotations (cyan accent) render correctly in dark mode — accent gradients preserved, bookmark chips legible. Took screenshots.
+  1432→19. Took **16 screenshots** total documenting: tasks-initial, tasks-filtered-high, tasks-save-view-dialog, tasks-saved-view-chip, tasks-set-as-default, tasks-auto-applied-default, tasks-after-delete, tasks-mobile, tasks-dark-mode; quotations-initial, quotations-filtered-accepted, quotations-save-view-with-default, quotations-saved-view-chip, quotations-auto-applied-default, quotations-mobile, quotations-dark-mode.
+  1433→
+  1434→Stage Summary:
+  1435→- Files created/modified (3):
+  1436→  - **CREATE:** `src/components/app/saved-views-bar.tsx` (~385 lines) — shared `SavedViewsBar` + `SaveViewForm` + `useSavedViews<T>` hook (generic over filter shape). Encapsulates all React Query boilerplate (queries, mutations, apply/clear/save/delete/setDefault actions, hasActiveFilters, auto-apply-on-mount). `SaveViewForm` uses an inner `SaveViewFormBody` component that only mounts when `open=true` for clean state reset without triggering `react-hooks/set-state-in-effect` lint rule.
+  1437→  - **MODIFY:** `src/components/app/views/tasks-view.tsx` (444 → ~480 lines) — added `TaskFilters` shape, `useSavedViews` hook with entity="TASK", `SavedViewsBar` below KPI row, `SaveViewForm` dialog, amber PageHeader accent, full filter bar (search + priority + status + assignee dropdowns), client-side filtering via `useMemo`, status-focus kanban column rendering (single column when status != "all").
+  1438→  - **MODIFY:** `src/components/app/views/quotations-view.tsx` (~470 → ~490 lines) — added `QuotationFilters` shape, `useSavedViews` hook with entity="QUOTATION", `SavedViewsBar` between KPI row and status tabs, `SaveViewForm` dialog, cyan PageHeader accent. Filter state consolidated from individual `useState` calls into a single `filters` object with `setFilter(patch)` helper.
+  1439→- Key features added:
+  1440→  - **Reusable shared component** (`saved-views-bar.tsx`) — both Tasks and Quotations (and any future view) can adopt Saved Views in ~5 lines: `const sv = useSavedViews({ entity, filters, setFilters, defaultFilters })` + `<SavedViewsBar {...sv} onSaveCurrent={() => setSaveViewOpen(true)} />` + `<SaveViewForm open={saveViewOpen} ... />`. No duplicated React Query boilerplate.
+  1441→  - **Visual consistency** with enquiries-view's inline SavedViewsBar — same bookmark chips, same dropdown menu (Apply / Set as default / Delete), same "Save View" + "Clear" buttons, same apply/default/delete toasts.
+  1442→  - **Default view auto-apply on mount** — `useEffect` in `useSavedViews` runs once when the saved-views query returns; if a default view exists AND no manual selection has been made AND filters are still pristine, it applies the default view's filters and sets `activeViewId`. Guarded by a `defaultApplied` flag so it never re-runs.
+  1443→  - **Active view highlighting** — the currently-applied saved view chip shows `border-primary bg-primary/10 text-primary` styling.
+  1444→  - **Default view indicator** — saved views marked as default show a `BookmarkCheck` icon next to their name in the chip.
+  1445→  - **Delete-active-view cleanup** — `deleteView()` checks if the deleted view was the active one and resets filters to defaults, so the bar stays visually consistent.
+  1446→  - **Tasks filter enhancements** — added priority dropdown (LOW/MEDIUM/HIGH/CRITICAL), search input (filters by title/description/assignee), status dropdown that focuses the kanban on a single column (when status != "all", only that column renders full-width).
+  1447→  - **PageHeader accents** — Tasks uses amber (action/work), Quotations uses cyan (financial) — distinct from Enquiries' primary (sky) and from each other, per task spec.
+  1448→- Verification:
+  1449→  - `bun run lint` → **exit 0** (0 errors, 0 warnings after 4 iterations fixing `react-hooks/set-state-in-effect` issues).
+  1450→  - `bunx tsc --noEmit` → **0 errors in touched files**. 6 pre-existing errors in unrelated files only (examples/websocket, skills, src/app/api/ai-assistant, src/app/api/deletion-requests).
+  1451→  - Dev log: clean — all saved-views/tasks/quotations API calls return 200; POST /api/saved-views 200 (saved 2 views); DELETE /api/saved-views/{id} 200 (deleted 2 views); no compile errors; only pre-existing NextAuth URL warning.
+  1452→  - agent-browser E2E: **full success** — Tasks view: filtered by HIGH priority, saved "High Priority" view, applied via chip, set as default, reloaded → auto-applied on mount, deleted → filters reset. Quotations view: filtered by ACCEPTED tab, saved "Accepted Quotations" view with default checkbox, applied via chip, reloaded → auto-applied on mount, deleted → filters reset. 16 screenshots captured across desktop/mobile/dark-mode.
+  1453→- Risks / follow-ups:
+  1454→  - **Tasks filter is partially client-side** — `priority`, `search`, and `status` filters are applied via `useMemo` over the API response (which is already filtered by `assigneeId` server-side). For datasets >100 tasks (the API default limit), some tasks may be missing from filtered results. The API supports `?limit=` up to 500, so increasing the limit would mitigate this. A future enhancement could pass `priority`/`search` to the `/api/tasks` API (which doesn't currently support them).
+  1455→  - **Status filter on Tasks is a "column focus" feature** — when status != "all", only that one column is shown full-width. This is a deliberate UX choice (focus on one status at a time) but differs from typical "filter" semantics. If users find this confusing, a future enhancement could add a separate "Focus column" dropdown distinct from the status filter that gets saved with the view.
+  1456→  - **enquiries-view.tsx still has its own inline SavedViewsBar** — per task spec, I did NOT refactor it to use the new shared component (to avoid breaking a working feature in parallel work). A future cleanup task could migrate enquiries-view.tsx to use `useSavedViews` + `SavedViewsBar` from the shared file, which would let us delete ~150 lines of inline code.
+  1457→  - **SaveViewForm `activeFilterCount` is computed by the caller** — each view passes its own count (e.g., Tasks counts 4 dimensions, Quotations counts 2). This is a minor inconvenience but keeps the shared component generic. A future enhancement could pass the `chips` array (like enquiries does) for a richer filter summary, but that would require each view to expose a chip-building function.
+  1458→  - **Auto-apply only fires once per mount** — if the user navigates away from Tasks and back (without a full page reload), the `defaultApplied` flag is reset (because the component unmounts/remounts), so the default view will auto-apply again. This is the intended behavior (matches enquiries-view). However, if the user had manually cleared filters and was viewing "All", navigating away and back will re-apply the default — which may or may not be desired. A future enhancement could persist `defaultApplied` in sessionStorage to prevent re-applying within a session.
+  1459→

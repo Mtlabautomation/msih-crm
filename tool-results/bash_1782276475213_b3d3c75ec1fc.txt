@@ -1,0 +1,300 @@
+  - **Active view highlighting** — the currently-applied saved view chip shows `border-primary bg-primary/10 text-primary` styling.
+  - **Default view indicator** — saved views marked as default show a `BookmarkCheck` icon next to their name in the chip.
+  - **Delete-active-view cleanup** — `deleteView()` checks if the deleted view was the active one and resets filters to defaults, so the bar stays visually consistent.
+  - **Tasks filter enhancements** — added priority dropdown (LOW/MEDIUM/HIGH/CRITICAL), search input (filters by title/description/assignee), status dropdown that focuses the kanban on a single column (when status != "all", only that column renders full-width).
+  - **PageHeader accents** — Tasks uses amber (action/work), Quotations uses cyan (financial) — distinct from Enquiries' primary (sky) and from each other, per task spec.
+- Verification:
+  - `bun run lint` → **exit 0** (0 errors, 0 warnings after 4 iterations fixing `react-hooks/set-state-in-effect` issues).
+  - `bunx tsc --noEmit` → **0 errors in touched files**. 6 pre-existing errors in unrelated files only (examples/websocket, skills, src/app/api/ai-assistant, src/app/api/deletion-requests).
+  - Dev log: clean — all saved-views/tasks/quotations API calls return 200; POST /api/saved-views 200 (saved 2 views); DELETE /api/saved-views/{id} 200 (deleted 2 views); no compile errors; only pre-existing NextAuth URL warning.
+  - agent-browser E2E: **full success** — Tasks view: filtered by HIGH priority, saved "High Priority" view, applied via chip, set as default, reloaded → auto-applied on mount, deleted → filters reset. Quotations view: filtered by ACCEPTED tab, saved "Accepted Quotations" view with default checkbox, applied via chip, reloaded → auto-applied on mount, deleted → filters reset. 16 screenshots captured across desktop/mobile/dark-mode.
+- Risks / follow-ups:
+  - **Tasks filter is partially client-side** — `priority`, `search`, and `status` filters are applied via `useMemo` over the API response (which is already filtered by `assigneeId` server-side). For datasets >100 tasks (the API default limit), some tasks may be missing from filtered results. The API supports `?limit=` up to 500, so increasing the limit would mitigate this. A future enhancement could pass `priority`/`search` to the `/api/tasks` API (which doesn't currently support them).
+  - **Status filter on Tasks is a "column focus" feature** — when status != "all", only that one column is shown full-width. This is a deliberate UX choice (focus on one status at a time) but differs from typical "filter" semantics. If users find this confusing, a future enhancement could add a separate "Focus column" dropdown distinct from the status filter that gets saved with the view.
+  - **enquiries-view.tsx still has its own inline SavedViewsBar** — per task spec, I did NOT refactor it to use the new shared component (to avoid breaking a working feature in parallel work). A future cleanup task could migrate enquiries-view.tsx to use `useSavedViews` + `SavedViewsBar` from the shared file, which would let us delete ~150 lines of inline code.
+  - **SaveViewForm `activeFilterCount` is computed by the caller** — each view passes its own count (e.g., Tasks counts 4 dimensions, Quotations counts 2). This is a minor inconvenience but keeps the shared component generic. A future enhancement could pass the `chips` array (like enquiries does) for a richer filter summary, but that would require each view to expose a chip-building function.
+  - **Auto-apply only fires once per mount** — if the user navigates away from Tasks and back (without a full page reload), the `defaultApplied` flag is reset (because the component unmounts/remounts), so the default view will auto-apply again. This is the intended behavior (matches enquiries-view). However, if the user had manually cleared filters and was viewing "All", navigating away and back will re-apply the default — which may or may not be desired. A future enhancement could persist `defaultApplied` in sessionStorage to prevent re-applying within a session.
+
+---
+Task ID: 9-a
+Agent: full-stack-developer
+Task: Bulk Reassign on Enquiries + accent variants on Calendar/AI Assistant/Forecasting
+
+Work Log:
+- Read worklog.md (Tasks 1 → 8-b) to confirm cycle #8 state: Audit Logs + Reports polish (8-a), Saved Views on Tasks + Quotations (8-b). Stable codebase, lint clean, all views verified. PageHeader accent variants: Dashboard=primary, Enquiries=primary, Tasks=amber, Quotations=cyan, Audit Logs=violet, Reports=emerald.
+- Read `src/lib/session.ts` (`getSessionUser()` returns full Prisma User or null), `src/lib/audit.ts` (`logAudit({ userId, userName, action, entity, entityId, description, previousValue?, newValue? })` writes to AuditLog with IP + UA from headers), `src/lib/api-client.ts` (`api()` helper throws on non-2xx, returns parsed JSON or undefined for 204), `src/lib/db.ts` (Prisma client).
+- Read existing `src/app/api/enquiries/route.ts` (POST creates enquiry with auto-generated ENQ-YYYY-NNNN number, audit logs with action="CREATE" entity="ENQUIRY") and `src/app/api/enquiries/[id]/route.ts` (PATCH enforces RBAC — executives cannot change `assignedTo`, returns 403 "Only managers/admins can reassign leads"). Confirmed Prisma schema: `Enquiry.assignedTo` is a required String FK to `User.id` via `assignedExecutive` relation.
+- Read `src/app/api/users/route.ts` (GET returns all users with `active: boolean` field, no `?active=true` filter param — I'll filter client-side in the dropdown).
+- Read `src/components/app/shared.tsx` PageHeader definition — confirmed `accent?: "primary" | "emerald" | "amber" | "violet" | "rose" | "cyan"` prop with a 6-entry accentMap of `{ tile, line }` Tailwind gradient classes.
+- Read existing `src/components/app/views/enquiries-view.tsx` lines 1–500 + 835–1010 to extract the bulk-actions pattern: `selectedIds: Set<string>`, `bulkMode: boolean`, `bulkStatusMut` + `bulkDeleteMut` mutations, the bulk-actions Card (lines 469–509 originally) with "Set Status" DropdownMenu + "Request Delete" Button, and the Bulk Delete Dialog at the bottom (lines 855–884).
+- Confirmed `usersData` query (lines 179–182) already loads all users — reused this for the reassignable-users dropdown (no need for a separate fetch).
+
+**Part 1 — Backend: Created `/home/z/my-project/src/app/api/enquiries/bulk-reassign/route.ts` (159 lines):**
+- POST handler accepting `{ enquiryIds: string[], assignedTo: string }`.
+- Auth via `getSessionUser()` → 401 if not logged in.
+- RBAC: `ALLOWED_ROLES = new Set(["MANAGER", "ADMIN", "SUPER_ADMIN"])` → 403 for EXECUTIVE.
+- Validates `enquiryIds` is a non-empty array of strings (400 otherwise), `assignedTo` is a non-empty string (400 otherwise).
+- Validates target user exists (404 if not) and is `active` (400 if inactive).
+- De-duplicates enquiry IDs via `Array.from(new Set(...))`.
+- Fetches current state of selected enquiries (with `assignedExecutive.name` for audit description).
+- Filters out enquiries already assigned to the target (no-op skip — avoids writing misleading audit logs).
+- Uses `prisma.$transaction([update1, update2, ...])` (batch form, atomic — any failure rolls back all updates).
+- After transaction commits, writes per-row audit logs via `Promise.allSettled(logAudit(...))` (best-effort, parallel — audit failures don't fail the API):
+  - `action: "TRANSFER"`, `entity: "Enquiry"` (per task spec)
+  - `description: "Bulk reassigned enquiry {enquiryNumber} ({company}) from {oldName} to {newName}"`
+  - `previousValue: { assignedTo: <oldId>, assignedToName: <oldName> }`
+  - `newValue: { assignedTo: <newId>, assignedToName: <newName> }`
+- Returns `{ updated, skipped, errors: [{id, error}], targetUser: {id, name}, auditFailures?, message? }`.
+- Verified reachable: `curl -X POST /api/enquiries/bulk-reassign -d '{"enquiryIds":["x"],"assignedTo":"y"}'` → 401 `{"error":"Unauthorized"}` ✓
+
+**Part 1 — Frontend: Modified `src/components/app/views/enquiries-view.tsx` (1371 → 1496 lines, +125 net):**
+- Added `Users` icon to the existing lucide-react import block.
+- Added state near existing bulk-state declarations: `canReassign` (boolean, derived from `role`), `bulkReassignOpen` (Dialog state), `reassignTargetId` (selected target user ID).
+- Added `reassignableUsers` `useMemo` (filters `usersData.users` to active EXECUTIVE or MANAGER roles) and `reassignTargetUser` (lookup). **Placed AFTER the `usersData` query declaration** to avoid `react-hooks/immutability` "accessed before declared" error.
+- Added `bulkReassignMut` `useMutation` (POSTs to `/api/enquiries/bulk-reassign`). On success:
+  - If `updated === 0 && skipped > 0` → `toast.info("No changes — all N selected enquiries are already assigned to {name}")`.
+  - Otherwise → `toast.success("Reassigned N enquiries to {name} · M already assigned · K not found")` (optional clauses only when counts > 0).
+  - Clears selection, exits bulk mode, closes dialog, resets target ID, invalidates `["enquiries"]` + `["dashboard"]` queries.
+  - On error → `toast.error(e.message)`.
+- Added "Reassign" button in the bulk-actions toolbar (between "Set Status" and "Request Delete"). Gated by `{canReassign && ...}` — executives never see it. Shows `<Users />` icon (or `<Loader2 className="animate-spin" />` when pending). Button is `disabled` while `bulkReassignMut.isPending`.
+- Added Bulk Reassign Dialog at the end of the JSX (after the Bulk Delete Dialog):
+  - Title: "Reassign Selected Enquiries" (with `Users` icon in `text-primary`).
+  - Description: "Move **N** selected {enquiry|enquiries} to a different sales executive." (singular/plural-aware via `selectedIds.size === 1`).
+  - "Assign to *" Label + `Select` dropdown listing `reassignableUsers`. Each item shows name + role hint ("Manager" or "executive").
+  - Confirmation banner (sky-tinted border + bg, `text-xs`) appears when target is selected: "You are about to reassign **N** {enquiry|enquiries} to **{name}**."
+  - Footer: "Cancel" (outline) + "Reassign N {enquiry|enquiries}" (primary, disabled when `!reassignTargetId || bulkReassignMut.isPending`, shows spinner when pending).
+  - `onOpenChange` resets `reassignTargetId` to `""` when dialog closes (clean state on next open).
+
+**Part 2 — Accent variants on remaining views:**
+1. **`src/components/app/views/calendar-view.tsx`** — VERIFIED already has `accent="amber"` on its `<PageHeader>` (lines 145–150). No edit needed (was set in an earlier cycle's polish pass).
+2. **`src/components/app/views/ai-assistant-view.tsx`** — Added `accent="violet"` to the `<PageHeader>` (one-line edit on line 41). AI = intelligence/insight, violet matches.
+3. **`src/components/app/views/forecasting-view.tsx`** — VERIFIED already has `accent="emerald"` on its `<PageHeader>` (line 20). No edit needed (was set in an earlier cycle's polish pass).
+
+Stage Summary:
+- Files created/modified:
+  - **CREATE:** `src/app/api/enquiries/bulk-reassign/route.ts` (159 lines) — POST handler with RBAC (MANAGER/ADMIN/SUPER_ADMIN only), atomic `prisma.$transaction` batch update, per-row audit logs (action="TRANSFER", entity="Enquiry"), returns `{ updated, skipped, errors, targetUser }`. Validates enquiryIds array + assignedTo user existence/active status.
+  - **MODIFY:** `src/components/app/views/enquiries-view.tsx` (1371 → 1496 lines, +125 net) — added `Users` icon import, `canReassign` role gate, `bulkReassignOpen`/`reassignTargetId` state, `reassignableUsers`/`reassignTargetUser` derived values, `bulkReassignMut` mutation (with success/error toasts + query invalidation), "Reassign" button in bulk-actions toolbar (gated by role), and a full Reassign Dialog with Select dropdown + confirmation banner + Cancel/Submit footer.
+  - **MODIFY:** `src/components/app/views/ai-assistant-view.tsx` (97 lines, +1/-1) — added `accent="violet"` to `<PageHeader>`.
+  - **VERIFIED (no changes needed):** `src/components/app/views/calendar-view.tsx` — already has `accent="amber"`.
+  - **VERIFIED (no changes needed):** `src/components/app/views/forecasting-view.tsx` — already has `accent="emerald"`.
+- Key features added:
+  - **Bulk Reassign API** — atomic multi-row reassignment with proper RBAC, input validation, and audit trail. Returns structured response with per-row success/skip/error breakdown so the UI can give precise feedback.
+  - **Bulk Reassign UI** — a Reassign button visible only to managers/admins when bulk mode is active and ≥1 enquiry is selected. Opens a Dialog with a dropdown of active executives+managers, a live confirmation banner, and a submit button that reflects the selection count (singular/plural-aware). Toast feedback distinguishes "all already assigned to target" (info) from "N reassigned successfully" (success).
+  - **AI Assistant PageHeader accent** — violet (intelligence/insight theme), distinct from Dashboard (primary sky), Enquiries (primary sky), Tasks (amber), Quotations (cyan), Audit Logs (violet — shared with AI Assistant as both relate to intelligence), Reports (emerald), Calendar (amber — shared with Tasks as both relate to time/action), Forecasting (emerald — shared with Reports as both relate to growth/money).
+- Verification:
+  - `bun run lint` → **exit 0** (0 errors, 0 warnings). One iteration needed: initial `useMemo` placement before the `usersData` query declaration triggered `react-hooks/immutability` — fixed by moving derived values after the query.
+  - `bunx tsc --noEmit` → **0 errors in touched files**. 6 pre-existing errors in unrelated files only (examples/websocket ×2, skills ×2, src/app/api/ai-assistant/route.ts, src/app/api/deletion-requests/[id]/route.ts).
+  - Dev log: clean — only the pre-existing NextAuth URL warning. No compile errors, no 4xx/5xx errors. The bulk-reassign route compiles and is reachable (curl test confirms 401 for unauthenticated requests, as expected).
+- Risks / follow-ups:
+  - **Audit logs are best-effort, not transactional** — `prisma.$transaction` only wraps the enquiry updates; audit logs use the shared `db` client after the transaction commits. If an audit write fails, the enquiry update still succeeds (the API response includes an `auditFailures` count when this happens). This matches the pattern used by other bulk operations in the codebase.
+  - **No `LeadTransfer` record created** — the schema has a `LeadTransfer` model used by the admin "Lead Transfers" view, but bulk reassign only updates `Enquiry.assignedTo` + writes audit logs. For a richer transfer workflow (with approval + reason capture), a future enhancement could create `LeadTransfer` rows alongside the bulk reassign.
+  - **Audit `entity` casing inconsistency** — task spec required `entity: "Enquiry"` (PascalCase), but existing enquiry audit logs use `entity: "ENQUIRY"` (UPPERCASE). The Audit Logs view's entity filter reads distinct entities dynamically, so both casings will appear as separate filter options until the dataset cycles out. A future cleanup could normalize all audit log entity values to a single casing convention.
+  - **Calendar + Forecasting accents were already present** — the task spec listed them as "remaining views that don't have one yet" but they were already set in an earlier cycle. Verified their current state and confirmed they match the spec. Flagged for transparency.
+  - **Manager role included in reassignable-users dropdown** — managers can be valid lead owners (matches the existing Advanced Filters' Executive dropdown behavior). If the business rule is "only EXECUTIVE-role users should receive reassigned enquiries", the `reassignableUsers` filter on line ~194 can be tightened to `u.role === "EXECUTIVE"` only.
+
+---
+Task ID: 9-b
+Agent: full-stack-developer
+Task: Notifications dropdown in app header + keyboard shortcuts overlay
+
+Work Log:
+- Read worklog.md (Tasks 1 → 9-a) to confirm cycle #9 starting state. App stable, lint clean, all views verified. Task 9-a (Bulk Reassign + accent variants on Calendar/AI Assistant/Forecasting) just completed successfully.
+- Read prisma/schema.prisma — confirmed `AuditLog` model has fields `{ id, userId, userName, action, entity, entityId?, description, previousValue?, newValue?, ipAddress?, userAgent?, timestamp }`. Note: the column is `timestamp DateTime @default(now())`, **not** `createdAt` — the API route must map this to camelCase `createdAt` in the response shape per the task spec.
+- Read `src/lib/session.ts` (`getSessionUser()` returns the full Prisma User or null), `src/lib/api-client.ts` (`api()` throws on non-2xx; `timeAgo(d)` returns relative time string), `src/lib/db.ts` (Prisma client singleton).
+- Reviewed `src/components/ui/` directory listing — confirmed `popover.tsx`, `dialog.tsx`, `button.tsx`, `badge.tsx`, `dropdown-menu.tsx`, `avatar.tsx`, `input.tsx` all available. No new shadcn/ui components needed.
+- Read existing `src/components/app/app-shell.tsx` (HEAD version, 123 lines): bare shell with `<Sidebar>`, `<Header>`, `<main>` (ViewRouter), `<Footer>`, `<CommandPalette>`, `<ScrollToTopButton>`. No keyboard shortcut handling yet — needed to be added.
+- Read existing `src/components/app/header.tsx` (HEAD version, 151 lines): top bar with mobile menu, view label, search input, theme toggle, user avatar dropdown. No bell, no keyboard hint button yet.
+- Read existing `src/app/api/notifications/route.ts` (HEAD version, 75 lines): only had a POST handler (`mark-all-read` / `mark-read`) operating on the `Notification` model. No GET — needed to add a GET that reads from `AuditLog`.
+
+**Part 1 — Backend: Modified `/home/z/my-project/src/app/api/notifications/route.ts` (75 → 102 lines):**
+- Added `GET` handler (kept the existing POST handler untouched for future explicit-notification features).
+- Auth via `getSessionUser()` → returns 401 `{"error":"Unauthorized"}` if not logged in.
+- Parses `?limit` query param (default 25, clamped to `[1, 50]` via `Math.max(1, Math.min(n, 50))`).
+- Parses optional `?recent=24h` query param (limits to events from the last 24 hours — available for future managers/admins who want a tighter time window).
+- Role-based scoping:
+  - `EXECUTIVE` → `where.userId = user.id` (only their own activity).
+  - `MANAGER` / `ADMIN` / `SUPER_ADMIN` → no `userId` filter (all events).
+- Calls `prisma.auditLog.findMany({ where, orderBy: { timestamp: "desc" }, take: limit })`.
+- Projects each row to `{ id, action, entity, description, userName, createdAt }` where `createdAt = l.timestamp.toISOString()` (camelCase ISO string per spec).
+- Returns `NextResponse.json(items)`.
+
+**Part 1 — Frontend: Modified `/home/z/my-project/src/components/app/header.tsx` (151 → 344 lines):**
+- Added imports: `useQuery` from `@tanstack/react-query`; `Popover`/`PopoverContent`/`PopoverTrigger` from shadcn/ui; `Bell`, `Keyboard`, `Plus`, `Pencil`, `Trash2`, `LogIn`, `LogOut as LogOutIcon`, `CheckCircle2`, `XCircle`, `ArrowLeftRight`, `Inbox` from `lucide-react`; `cn`, `api`, `timeAgo`, `toast`, `LucideIcon` type.
+- Added `NotificationItem` interface: `{ id, action, entity, description, userName, createdAt }`.
+- Added `ACTION_STYLE` map (8 entries + `DEFAULT_ACTION_STYLE` fallback) mapping each action to `{ icon: LucideIcon, color: string, bg: string }`:
+  - `CREATE` → emerald `Plus`
+  - `UPDATE` → sky `Pencil`
+  - `DELETE` → rose `Trash2`
+  - `LOGIN` → sky `LogIn`
+  - `LOGOUT` → slate `LogOut`
+  - `APPROVE` → emerald `CheckCircle2`
+  - `REJECT` → rose `XCircle`
+  - `TRANSFER` → violet `ArrowLeftRight`
+- Added `truncate(s, max=60)` helper.
+- Added `NotificationsBell` component (~160 lines):
+  - `useQuery<NotificationItem[]>({ queryKey: ["notifications"], queryFn: () => api("/api/notifications?limit=25"), refetchInterval: 60_000, staleTime: 30_000 })` — refetches every 60s for a live feel.
+  - Toast on fetch errors — suppressed on first load (only fires after a previous successful fetch) to avoid noise during initial mount.
+  - `recentCount` via `useMemo` — counts items where `new Date(createdAt).getTime() >= Date.now() - 60 * 60 * 1000`.
+  - Bell button (`Button variant="ghost" size="icon"`): `aria-label` adapts to count ("Notifications" vs "N new notifications"); rose-500 pill badge with count (capped at "9+" when ≥10) when `recentCount > 0`; small emerald dot when `recentCount === 0 && items.length > 0`.
+  - Popover panel (`w-[360px] max-w-[calc(100vw-2rem)] p-0`):
+    - Header: "Recent Activity" + "N new" Badge + "Live" indicator with `animate-ping` pulse on an emerald dot.
+    - List (`max-h-[420px] overflow-y-auto scroll-thin`): 4 skeleton rows during `isLoading`; `Inbox`-icon empty state when `items.length === 0`; otherwise `divide-y` `<ul>` of items. Each item: 8×8 colored icon tile + truncated description (60 chars) + footer line with entity Badge + `timeAgo(createdAt)` (full date in `title` for hover) + `userName`.
+    - Footer: "View all in Audit Logs" button → closes the popover and calls `setView("admin-audit")` via the Zustand store.
+- Modified `Header` signature: `Header({ onOpenShortcuts }: HeaderProps = {})`. Added a `Keyboard`-icon ghost button (between theme toggle and bell) with `aria-label="Keyboard shortcuts"` and `title="Keyboard shortcuts (?)"`. Button only renders when `onOpenShortcuts` is provided. Added `<NotificationsBell />` after the keyboard button.
+
+**Part 2 — Created `/home/z/my-project/src/components/app/shortcuts-help.tsx` (145 lines, NEW):**
+- Controlled `Dialog` via `open` + `onOpenChange` props (trigger logic lives in app-shell).
+- `Shortcut` type: `{ keys: string[]; description: string; disabled?: boolean }`. `ShortcutGroup` type: `{ title: string; items: Shortcut[] }`.
+- `GROUPS` constant with 3 sections:
+  - **Navigation**: `⌘ K` (command palette), `G D` (Dashboard), `G E` (Enquiries), `G C` (Customers), `G Q` (Quotations), `G T` (Tasks), `G F` (Follow-Ups), `G R` (Reports), `G A` (AI Assistant).
+  - **Actions**: `N` (New enquiry — disabled), `/` (Focus search — disabled).
+  - **Help**: `?` (Show this help), `Esc` (Close dialog / sheet).
+- Each item rendered as `<li>` with description (dimmed `text-muted-foreground/70` when disabled) + "soon" pill (dashed border, muted bg, `text-[9px]`) for disabled items + row of `<Kbd>` keys on the right.
+- `Kbd` sub-component: `font-mono` styled `<kbd>` with subtle shadow.
+- Header: Keyboard icon tile in `bg-primary/10 ring-1 ring-inset ring-primary/20` + "Keyboard Shortcuts" title + description.
+- Footer: "Press ? anytime to open this dialog" hint with inline `<kbd>` + "MSIH CRM V1.0" attribution.
+
+**Part 2 — Modified `/home/z/my-project/src/components/app/app-shell.tsx` (123 → 227 lines):**
+- Added `useState` + `useRef` + `useEffect` imports. Added `ShortcutsHelp` import.
+- Added `GOTO_MAP: Record<string, ViewKey>` constant: `{ d: "dashboard", e: "enquiries", c: "customers", q: "quotations", t: "tasks", f: "followups", r: "reports", a: "ai-assistant" }`.
+- Added `isTypingTarget(t)` helper — returns `true` if `t` is an `INPUT`, `TEXTAREA`, `SELECT`, or `contentEditable` element (so shortcuts don't fire while typing).
+- `AppShell` component:
+  - `shortcutsOpen` state + `shortcutsOpenRef` (kept in sync via a tiny `useEffect`) so the global keydown handler always sees the latest value without re-binding on every state change.
+  - `gArmedRef` + `gTimerRef` for the `G then X` sequence detection.
+  - Global `keydown` listener (registered in a `useEffect` with `[setView]` deps):
+    - Skips when `isTypingTarget(e.target)`.
+    - Skips `Cmd/Ctrl+K` (handled by `CommandPalette`).
+    - `?` (Shift+/) → `preventDefault()` + `setShortcutsOpen(true)`.
+    - `Escape` → if `shortcutsOpenRef.current`, `setShortcutsOpen(false)`.
+    - `g` (lowercased) → arms a 1-second window (`gArmedRef = true` + `setTimeout` to auto-clear). Any subsequent keypress clears the timer.
+    - If armed and next key matches `GOTO_MAP[lower]` → `preventDefault()` + `setView(target)` + clear flag and timer.
+    - Cleanup: removes the listener and clears any pending timer.
+  - Renders `<Header onOpenShortcuts={() => setShortcutsOpen(true)} />`.
+  - Renders `<ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />` at the end of the shell (after `<ScrollToTopButton />`).
+  - Per spec: `N` (new enquiry) and `/` (focus search) shortcuts are NOT implemented — they appear in the overlay as "soon" / disabled only.
+
+Stage Summary:
+- Files created/modified:
+  - **CREATE:** `src/components/app/shortcuts-help.tsx` (145 lines) — controlled `Dialog` component listing all keyboard shortcuts grouped by Navigation / Actions / Help, with `N` and `/` shown as "soon" / disabled per task scope. Reusable `Kbd` sub-component.
+  - **MODIFY:** `src/app/api/notifications/route.ts` (75 → 102 lines, +27 net) — added `GET` handler with `getSessionUser()` auth (401 if not logged in), `?limit` param (default 25, max 50), `?recent=24h` optional window, role-based scoping (EXECUTIVE → own events only; MANAGER/ADMIN/SUPER_ADMIN → all), `prisma.auditLog.findMany({ where, orderBy: { timestamp: "desc" }, take: limit })`, projects to `{ id, action, entity, description, userName, createdAt }` with `createdAt = timestamp.toISOString()`. Pre-existing POST (`mark-all-read` / `mark-read`) preserved.
+  - **MODIFY:** `src/components/app/header.tsx` (151 → 344 lines, +193 net) — added `NotificationsBell` component (~160 lines) with `useQuery` (60s refetch), "N new" rose badge for events in the last hour, emerald dot when 0 new but items exist, Popover panel with header ("Recent Activity" + "Live" pulse) / scrollable list (8-action colored icon map + truncate-60 + entity Badge + `timeAgo` + userName) / empty state (`Inbox` icon) / footer ("View all in Audit Logs" → `setView("admin-audit")`); added `Keyboard`-icon ghost button next to the bell that opens the shortcuts dialog via `onOpenShortcuts` prop.
+  - **MODIFY:** `src/components/app/app-shell.tsx` (123 → 227 lines, +104 net) — added `shortcutsOpen` state + `shortcutsOpenRef`, `GOTO_MAP` constant (8 entries: d/e/c/q/t/f/r/a), `isTypingTarget()` helper, and a global `keydown` listener handling `?` (open), `Escape` (close), and the `G then X` sequence detector (1-second arming window via `gArmedRef` + `gTimerRef`); passes `onOpenShortcuts` to `<Header>`; renders `<ShortcutsHelp>` at end of shell.
+- Key features added:
+  - **Notifications API** — `GET /api/notifications` returns the 25 most recent AuditLog events (or up to 50 via `?limit`), role-scoped so executives see only their own activity while managers/admins see everything. Response shape is camelCase-friendly for direct consumption by the React Query cache.
+  - **Notifications bell + Popover** — a Bell icon button in the top bar that opens a 360px-wide dropdown showing recent activity with action-colored icons, entity badges, relative timestamps, and a "View all in Audit Logs" deep-link. Auto-refreshes every 60s. Shows a rose "N new" badge for events created in the last hour (computed client-side), so users get a subtle visual cue that something has happened since they last looked.
+  - **Keyboard shortcuts overlay** — pressing `?` (Shift+/) anywhere outside an input opens a `Dialog` listing every global shortcut grouped by Navigation / Actions / Help. `N` (new enquiry) and `/` (focus search) are listed as "soon" / disabled to keep this task scoped. A `Keyboard`-icon button in the top bar offers a mouse-driven alternative for discovering the dialog.
+  - **`G then X` navigation** — a Vim-style sequence detector: pressing `g` arms a 1-second window; if the next key is one of `d/e/c/q/t/f/r/a`, the app navigates to the corresponding view via the Zustand store. No visible "g armed" indicator (scoped out — would be a follow-up enhancement).
+- Verification:
+  - `bun run lint` → **exit 0** (0 errors, 0 warnings). Single iteration; no fixes needed.
+  - `bunx tsc --noEmit` → **0 errors in touched files**. `grep -E "(notifications|shortcuts-help|app-shell|header)"` returns nothing. 6 pre-existing errors in unrelated files only (examples/websocket ×2, skills ×2, src/app/api/ai-assistant/route.ts, src/app/api/deletion-requests/[id]/route.ts).
+  - Dev log: clean. `GET /api/notifications?limit=25 200 in 12ms` (compile 3ms, render 10ms) appears repeatedly as the bell auto-refreshes every 60s. No compile errors, no 4xx/5xx from the notifications endpoint, no React hydration warnings. The pre-existing NextAuth URL warning is unchanged.
+- Risks / follow-ups:
+  - **`createdAt` is `timestamp` in the Prisma schema** — AuditLog uses `timestamp DateTime @default(now())`, not `createdAt`. The route correctly maps `l.timestamp.toISOString()` → `createdAt` in the JSON response so the client-side `timeAgo(createdAt)` and "last 1 hour" computations work transparently. If the schema column is ever renamed to `createdAt`, only the route needs updating.
+  - **"Unread" is approximated, not tracked per-user** — the bell's badge counts AuditLog events from the last hour, not actually-unread events. Opening the popover does **not** clear the badge (no per-user read state on AuditLog). The `Notification` Prisma model + the preserved `POST /api/notifications` (`mark-all-read`) and `PATCH /api/notifications/[id]` (`read: true|false`) endpoints are ready to wire up for a true read/unread model — listed as a follow-up.
+  - **Role visibility for executives** — an EXECUTIVE only sees their own actions in the bell. If the product later wants team-level notifications (e.g. "a follow-up was reassigned to you"), that should use the explicit `Notification` model (not AuditLog), since AuditLog is immutable historical record.
+  - **`N` (new enquiry) and `/` (focus search) shortcuts are stubbed** — per spec, listed in the overlay as "soon" / disabled. Implementing `N` would require a global `openEnquiryForm()` action in the Zustand store (currently the enquiry form is local to `enquiries-view.tsx`); `/` would require either a global search command-palette trigger or per-view search input refs. Both scoped out for this task.
+  - **`g` arming has no visible indicator** — pressing `g` outside an input arms the goto sequence for 1 second, but there's no on-screen feedback. If users find this confusing, a future enhancement could add a small toast or bottom-bar hint when `gArmedRef.current` is true.
+
+---
+Task ID: 9-c
+Agent: full-stack-developer
+Task: Timeline on Enquiry detail sheet (follow-up history)
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` (last ~500 lines) to absorb the design system (Industrial Blue sky-600, NO indigo / blue-600), the shared `Timeline` component API introduced in cycle #7-c, and the Audit Logs usage pattern from cycle #8-a.
+- Read `src/components/app/shared.tsx` lines 659–789 — confirmed `SectionCard` props (title/description?:string/icon?/action?:ReactNode/children) and `Timeline` props (`items: TimelineItemData[]` where each item = id/icon/tone?/title:ReactNode/content?/meta?/timestamp?/fullTimestamp?/actions?).
+- Read `src/components/app/views/admin-audit-view.tsx` lines 1–184 — mirrored its `ACTION_ICON` / `ACTION_TONE` map pattern and `TimelineItemData` builder for follow-ups.
+- Read `src/components/app/views/customers-view.tsx` lines 490–690 — confirmed the Customer 360 Sheet's local `ActivityTimeline` uses the same icon+per-type-tint pattern; used this as the visual reference for follow-up method icons.
+- Read `src/components/app/views/enquiries-view.tsx` (1496 lines) — confirmed the Enquiries view imports `<EnquiryDetail enquiryId={selected} onClose={() => openEnquiry(null)} />` from `./enquiry-detail` at line 904. The detail Sheet itself lives in `enquiry-detail.tsx` (439 lines pre-change), NOT in enquiries-view.
+- Read `src/components/app/views/enquiry-detail.tsx` end-to-end — identified the existing Follow-Ups tab (basic Card list with status/method badges + "Log Follow-Up" toggle form) and the existing `AddFollowUpForm` component (used `FU_METHODS` + `FU_STATUSES` dropdowns and sent `{ enquiryId, method, status, notes, outcome, nextFollowUpDate, enquiryStatus, completed }` to `POST /api/followups`).
+- Read `src/app/api/followups/route.ts` (POST + GET) and `src/app/api/followups/[id]/route.ts` (PATCH) — confirmed POST accepts `{ enquiryId, method, notes, outcome, status, completed, nextFollowUpDate }` and PATCH only toggles `completed` / `outcome` / `nextFollowUpDate`. Existing follow-ups on the Enquiry GET are already included via `followUps: { include: { user }, orderBy: { date: "desc" } }` so no extra fetch was needed — used `e.followUps` directly.
+- Updated imports in `enquiry-detail.tsx`: added `SectionCard`, `Timeline`, `type TimelineItemData`, `type TimelineTone` from `../shared`; added `Users`, `MessageCircle` and `type LucideIcon` from `lucide-react`.
+- Added `FU_METHOD_META` map: CALL=Phone (sky), EMAIL=Mail (violet), VISIT=Users (emerald), WHATSAPP=MessageCircle (cyan), MEETING=Users (emerald), NOTE=FileText (slate). Added `FU_METHOD_PILLS` array (6 entries incl. NOTE per task spec) for the quick-add form. Added `fuStatusBadge(completed)` helper that renders an outline Badge — emerald when completed, sky when open.
+- Added new `FollowUpHistorySection` component (~125 lines): wraps everything in a `SectionCard` titled "Follow-up History" with `PhoneCall` icon. Renders a muted banner summary above the form ("N follow-ups · M completed · Next: <date or 'None scheduled'> · Last: <fmtDateTime>"). Renders the quick-add form (`AddFollowUpForm`) below the summary. Builds `TimelineItemData[]` from `e.followUps` sorted newest-first by `date`. Each item: method-colored icon circle, title = method label + status badge (Open/Completed via `fuStatusBadge`), content = notes, meta = "Outcome: X · by <user>" (outcome shown only if present), timestamp = `timeAgo(nextFollowUpDate || date)` with `title={fmtDateTime(...)}` for full datetime on hover, and an actions slot containing a "Mark complete" outline Button — shown only for OPEN follow-ups AND when `role === ADMIN/SUPER_ADMIN/MANAGER` OR `f.createdBy === currentUserId`. Uses `useMutation` calling `PATCH /api/followups/[id]` with `{ completed: true }`; on success invalidates `["enquiry", enquiryId]`, `["followups"]`, and `["dashboard"]`.
+- Rewrote `AddFollowUpForm` (~140 lines): collapsible (button → form), pill-based method selector (6 round pills — CALL/EMAIL/VISIT/WHATSAPP/MEETING/NOTE — using `aria-pressed` and `border-primary bg-primary text-primary-foreground` when active), Notes textarea (required, with `disabled={!notes.trim()}` on submit), Outcome input (optional), Status selector (2 pills OPEN/COMPLETED — OPEN=sky-500 fill, COMPLETED=emerald-500 fill), Next Follow-Up date picker. Submit button shows `Loader2` spinner during `m.isPending`. POST body: `{ enquiryId, method, notes: notes.trim(), outcome: outcome.trim() || null, status, completed: status === "COMPLETED", nextFollowUpDate: nextFollowUpDate || null }`. On success: `toast.success("Follow-up logged")`, invalidates `["enquiry", enquiryId]` + `["followups"]` + `["dashboard"]`, resets all form fields, closes the form.
+- Replaced the `TabsContent value="followups"` body (was a `space-y-2` div of Cards) with a single `<FollowUpHistorySection enquiryId={e.id} followUps={e.followUps} role={role} currentUserId={(session?.user as any)?.id} />` invocation.
+- Removed the now-unused `FU_METHODS` and `FU_STATUSES` constants (no longer referenced anywhere in the file). Kept `ENQ_STATUSES` (still used by `EditEnquiryButton`) and `statusColor` (still used by the Quotations tab's `Badge className={statusColor(q.status)}`).
+- Resolved one TS error during verification: `SectionCard.description` is typed as `string` (not `ReactNode`), so passing the rich JSX summary there failed. Moved the summary out of `description` and rendered it inline as a muted banner (`border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground`) above the form — keeps the colored emphasis on `completedCount` (emerald) and the totals (foreground).
+- Ran `bun run lint` → exit 0. Ran `bunx tsc --noEmit 2>&1 | grep -E "enquiry-detail\.tsx|enquiries-view\.tsx"` → 0 errors in touched files (only pre-existing unrelated errors in `src/app/api/ai-assistant/route.ts` and `src/app/api/deletion-requests/[id]/route.ts` per cycle #9-b's worklog).
+- Checked dev log (`tail -40 dev.log | grep -v "^prisma:query"`) — clean. No compile errors, no 4xx/5xx, no React hydration warnings. The `✓ Compiled in 206ms` line confirms the new enquiry-detail.tsx compiled successfully.
+
+Stage Summary:
+- Files created/modified:
+  - **MODIFY:** `src/components/app/views/enquiry-detail.tsx` (439 → 694 lines, +255 net) — replaced basic follow-up Card list with a `SectionCard`-wrapped `Timeline` view + summary header + enhanced pill-based quick-add form + per-item "Mark complete" action button.
+- Key features added:
+  - **Visual Timeline** — every follow-up for the enquiry now renders as a vertical Timeline item with a colored icon circle per method (CALL=sky Phone, EMAIL=violet Mail, VISIT=emerald Users, WHATSAPP=cyan MessageCircle, MEETING=emerald Users, NOTE=slate FileText), title showing method label + Open/Completed badge, notes content, "Outcome: X · by <creator>" meta line, and a relative timestamp (`timeAgo(nextFollowUpDate || date)`) with full datetime on hover via the `title` attribute.
+  - **Quick-add form (pill-based)** — replaces the old Select-based form. Six round pill buttons for method (CALL/EMAIL/VISIT/WHATSAPP/MEETING/NOTE), Notes textarea (required), optional Outcome input, two pill buttons for Status (OPEN sky / COMPLETED emerald — default OPEN), optional Next Follow-Up date picker, and an "Add Follow-up" submit button with a Loader2 spinner during mutation. POSTs `{ enquiryId, method, notes, outcome, status, completed, nextFollowUpDate }` and on success invalidates `["enquiry", enquiryId]` + `["followups"]` + `["dashboard"]`, shows `toast.success("Follow-up logged")`, and resets all fields. Status sent as the literal string `"OPEN"` / `"COMPLETED"` per task spec; `completed` boolean also flipped to match (so the immutable-completion PATCH endpoint and the Follow-Ups kanban view both stay consistent).
+  - **Summary header** — a muted banner above the form: "N follow-ups · M completed · Next: <fmtDate or 'None scheduled'> · Last: <fmtDateTime(lastContact.date)>" — gives users an at-a-glance count of activity + the next scheduled touchpoint + the most recent contact date.
+  - **"Mark complete" action** — for any OPEN follow-up, when `role === ADMIN/SUPER_ADMIN/MANAGER` OR the current user is the follow-up's creator, a small outline Button with `CheckCircle2` icon appears in the actions slot of the timeline item. Clicking it fires `PATCH /api/followups/[id]` with `{ completed: true }`, shows `toast.success("Follow-up marked complete")`, and refetches the enquiry-detail cache so the item's badge flips to "Completed" and the button disappears.
+  - **RBAC-aware** — executives see the timeline in full but only see "Mark complete" on their own follow-ups; managers/admins see it on all open follow-ups.
+- Verification:
+  - `bun run lint` → **exit 0** (0 errors, 0 warnings). Single iteration; no fixes needed after removing unused `FU_METHODS` / `FU_STATUSES` constants and re-homing the summary banner out of the typed-as-string `SectionCard.description`.
+  - `bunx tsc --noEmit` → **0 errors in touched files**. `grep -E "enquiry-detail\.tsx|enquiries-view\.tsx"` returns nothing. Only 6 pre-existing errors in unrelated files (ai-assistant, deletion-requests, examples, skills).
+  - Dev log: clean. `✓ Compiled in 206ms` confirms the new file compiled successfully. No runtime errors, no React hydration warnings, no 4xx/5xx from any endpoint. Existing API endpoints (`/api/enquiries/[id]`, `/api/followups`, `/api/followups/[id]`) handled the new request shapes without modification.
+- Risks / follow-ups:
+  - **No separate `useQuery(["followups", enquiryId])` fetch was added** — the Enquiry GET already returns follow-ups (with user, sorted desc by date), so the new Timeline is fed directly from `e.followUps`. This avoids a redundant network round-trip but couples the Timeline's freshness to the `["enquiry", enquiryId]` cache key. The mutations (POST + PATCH) correctly invalidate that key, so this is consistent. If a future change adds follow-ups from elsewhere (e.g. the Follow-Ups kanban view marking one complete), that view already invalidates `["followups"]` — but not `["enquiry", enquiryId]` — so an open Enquiry detail Sheet might briefly show a stale "Open" badge until the user re-opens it. Mitigation option: also invalidate `["enquiry", <id>]` from the Follow-Ups view's complete mutation (out of scope here).
+  - **`status` field is now overloaded** — historically the `FollowUp.status` column stored the lead status (HOT/WARM/COLD/LOST/CONVERTED); the new form sends `"OPEN"` / `"COMPLETED"` to that same column per the task spec, alongside the `completed` boolean. Existing rows still have their HOT/WARM/etc. values; the Timeline display reads only the `completed` boolean (not the `status` string), so legacy rows render correctly (as Open or Completed). If a future report needs to filter follow-ups by lead-status-at-time-of-contact, the schema should be widened (e.g. split into `leadStatus` + `completionStatus`) — out of scope here.
+  - **The "Lead Status" dropdown was removed from the quick-add form** — previously the form let the user set the enquiry's lead status to HOT/WARM/COLD/LOST/CONVERTED as a side-effect of logging a follow-up (it sent `enquiryStatus` to the API which updated `enquiry.status`). That side-effect is no longer wired up from this form. Users can still change the enquiry's status via the "Edit" button at the top of the sheet. If product wants the lead-status shortcut back, it should be added as an explicit optional dropdown — preferably also displayed in the Timeline's meta line so the history shows "WARM → HOT" transitions.
+  - **`Clock` icon is imported but unused** — pre-existing issue (was unused before this task too). Left as-is to keep the diff focused on the follow-ups feature; can be removed in a future cleanup pass.
+
+---
+Task ID: 9-cycle-summary
+Agent: main (Z.ai Code orchestrator)
+Task: Cycle #9 final summary + handover
+
+## Cycle #9 Overview
+Cycle #9 advanced the MSIH CRM with three new feature streams plus styling polish. All work was completed in parallel where possible (9-a and 9-b touched disjoint files; 9-c was sequenced after 9-a because both touched enquiries-related files).
+
+## Tasks Completed
+
+### Task 9-a: Bulk Reassign + accent variants (parallel)
+- **NEW** `src/app/api/enquiries/bulk-reassign/route.ts` (159 lines) — POST endpoint with RBAC (MANAGER/ADMIN/SUPER_ADMIN only), validates enquiryIds + assignedTo, uses `prisma.$transaction` for atomic update, best-effort audit logging via `Promise.allSettled` (action="TRANSFER", entity="Enquiry", newValue includes new assignee).
+- **MODIFIED** `src/components/app/views/enquiries-view.tsx` (1371 → 1496 lines) — added Bulk Reassign button (Users icon) to bulk actions area, visible only when bulk mode is active + at least 1 selected + role is MANAGER+. Opens Dialog with reassignable users Select (loads from existing /api/users query). On submit, POSTs to bulk-reassign, invalidates ["enquiries"], exits bulk mode, toasts success.
+- **MODIFIED** `src/components/app/views/ai-assistant-view.tsx` — added `accent="violet"` to PageHeader (AI = intelligence/insight).
+- Verified `accent="amber"` on calendar-view.tsx and `accent="emerald"` on forecasting-view.tsx (already present from prior cycles — confirmed matching spec, no edits needed).
+
+### Task 9-b: Notifications dropdown + Keyboard shortcuts overlay (parallel)
+- **NEW** `src/components/app/shortcuts-help.tsx` (145 lines) — controlled Dialog component with 3 groups (Navigation/Actions/Help), Kbd sub-component, `N` and `/` shown as "soon" / disabled.
+- **MODIFIED** `src/app/api/notifications/route.ts` (75 → 102 lines) — GET endpoint with role-based scoping (EXECUTIVE → own events only; MANAGER/ADMIN/SUPER_ADMIN → all), ?limit (default 25, max 50), ?recent=24h optional window, returns `{id, action, entity, description, userName, createdAt}` (ISO string).
+- **MODIFIED** `src/components/app/header.tsx` (151 → 344 lines) — added NotificationsBell component (Popover with useQuery 60s refetch, rose "N new" badge for last-1-hour events, emerald dot when 0 new but items exist, 8-action colored icon map, entity Badge + timeAgo + userName footer, Inbox empty state, "View all in Audit Logs" deep-link), and Keyboard shortcuts hint button.
+- **MODIFIED** `src/components/app/app-shell.tsx` (123 → 227 lines) — added shortcutsOpen state, global keydown listener with isTypingTarget guard (? opens, Escape closes), `G then X` sequence detector (1-second arming window via gArmedRef + gTimerRef) for navigation shortcuts (D/E/C/Q/T/F/R/A).
+
+### Task 9-c: Timeline on Enquiry detail sheet (sequenced after 9-a)
+- **MODIFIED** `src/components/app/views/enquiry-detail.tsx` (439 → 694 lines) — added FollowUpHistorySection (~125 lines) wrapping everything in SectionCard titled "Follow-up History" with summary banner ("N follow-ups · M completed · Next: … · Last: …"), then quick-add form, then Timeline of follow-ups with method-colored icons (CALL=sky/Phone, EMAIL=violet/Mail, VISIT=emerald/Users, WHATSAPP=cyan/MessageCircle, MEETING=emerald/Users, NOTE=slate/FileText), open/completed badges, outcome + creator meta, relative timestamps with full-datetime-on-hover, per-item "Mark complete" RBAC-gated button. Rewrote AddFollowUpForm (~140 lines) with pill-based Method selector (6 pills), required Notes textarea, optional Outcome input, pill-based OPEN/COMPLETED Status selector (default OPEN), optional Next Follow-Up date picker, Loader2 spinner on submit, POST /api/followups, invalidates ["enquiry", enquiryId] + ["followups"] + ["dashboard"].
+
+## Verification Summary
+- **`bun run lint`**: exit 0 across all three tasks (0 errors, 0 warnings). Task 9-a needed one iteration (moved `reassignableUsers` useMemo after `usersData` query declaration to satisfy `react-hooks/immutability`). Task 9-b and 9-c were single-iteration clean.
+- **`bunx tsc --noEmit`**: 0 errors in touched files for all three tasks. 6 pre-existing errors remain in unrelated files (examples/websocket ×2, skills ×2, src/app/api/ai-assistant/route.ts, src/app/api/deletion-requests/[id]/route.ts).
+- **Dev log**: clean throughout. No compile errors, no 4xx/5xx from any new endpoint. Notifications auto-refetch (GET /api/notifications?limit=25 200) every 60s. POST /api/followups 200 verified when adding test follow-up via E2E. Only the unchanged pre-existing NextAuth URL warning.
+- **agent-browser E2E**:
+  - Logged in as Super Admin → Dashboard loads cleanly.
+  - Enquiries view: opened first enquiry card → detail Sheet opens with new "Follow-up History" section. Summary banner shows "0 follow-ups · 0 completed · Next: None scheduled". Expanded "Log Follow-Up" form — 6 method pills (CALL/EMAIL/VISIT/WHATSAPP/MEETING/NOTE), Notes textarea (required), Outcome input, Status pills (OPEN/COMPLETED), Next Follow-Up date picker, Add Follow-up button (disabled until notes entered). Selected CALL + filled notes + clicked COMPLETED + clicked "Add Follow-up" → POST /api/followups 200 → Timeline updated to show "1 follow-ups · 1 completed · Last: 24 Jun, 04:16 am" with new entry "Phone Call · Completed · Test follow-up via agent-browser E2E · by Manoj Dore · just now".
+  - Closed sheet → enabled Bulk Select → selected 2 enquiry checkboxes → "Reassign" button appeared → clicked → Dialog opened with "Move N selected enquiries to a different sales executive" + "Assign to" Select dropdown listing 4 reassignable users (Rohit Sharma/Manager, Rohit Verma/executive, Priya Nair/executive, Amit Kulkarni/executive) + Cancel + Reassign button.
+  - Notifications bell (top-right) → click → Popover opens with "Recent Activity" header + animated "Live" pulse + list of 25 audit log events with colored icons (DELETE=rose Trash, UPDATE=sky Pencil, CREATE=emerald Plus, TRANSFER=violet ArrowLeftRight), entity Badge + timeAgo + userName footer.
+  - Keyboard shortcut `?` → Dialog opens with 3 groups (Navigation / Actions / Help) listing 11 shortcuts (⌘K, ?, Esc, GD, GE, GC, GQ, GT, GF, GR, GA, plus N and / marked "soon"). Escape closes dialog.
+  - Navigated to AI Sales Assistant → violet accent on PageHeader confirmed (icon tile + gradient divider both violet-tinted).
+  - Navigated to Forecasting → emerald accent confirmed.
+  - Navigated to Calendar → amber accent confirmed.
+
+## Current Project Status
+The MSIH CRM V1.0 is in a **stable, production-ready** state:
+- 23 views (Dashboard, Command Center, Enquiries, Follow-Ups, Calendar, Quotations, Customers, Tasks, Reminder Queue, Product Catalogue, Employee Performance, AI Sales Assistant, Forecasting, Reports, Import/Export, User Management, Product Management, Email Templates, Lead Transfers, Deletion Requests, Audit Logs, Settings, My Profile) — all functional.
+- 24+ API routes including the new `/api/enquiries/bulk-reassign` and `/api/notifications`.
+- 14 Prisma models with full RBAC + immutable audit trail + soft-delete approval workflow.
+- 4 user roles (Sales Executive, Sales Manager, Admin, Super Admin) with row-level security.
+- Shared design system: `PageHeader` with 6 accent variants (primary/emerald/amber/violet/rose/cyan), `Timeline` component, `SectionCard`, `EmptyState` with dotted grid pattern, `SavedViewsBar` + `useSavedViews` hook for Tasks/Quotations (and ready to extend to Enquiries).
+- Real-time: Notifications bell auto-refetches every 60s; command palette (⌘K); keyboard shortcuts overlay (?).
+- Dark mode via next-themes; mobile-first responsive throughout.
+
+## Unresolved Issues / Next-Phase Priorities
+- **enquiries-view.tsx still has its own inline SavedViewsBar** (~150 lines duplicated from the shared `saved-views-bar.tsx`). Could be migrated to use the shared `useSavedViews` hook to delete the inline code. Risk: breaking a working feature; should be done carefully.
+- **Audit `entity` casing inconsistency** — Task 9-a logs `entity: "Enquiry"` (PascalCase per spec) but existing logs use `"ENQUIRY"` (UPPERCASE). Both will appear as separate options in the Audit Logs entity filter until dataset cycles out. A future migration could normalize all entity values.
+- **Bulk Reassign doesn't create LeadTransfer records** — schema has the model used by admin "Lead Transfers" view, but bulk reassign only updates `assignedTo` + writes audit logs. A future enhancement could create LeadTransfer rows for a richer approval workflow.
+- **Notifications "unread" is approximated** — badge counts AuditLog events from the last hour, not actually-unread events (no per-user read state on AuditLog). A `Notification` model + read/unread endpoints are stubbed in `notifications/route.ts` (POST/PATCH preserved) ready to wire up.
+- **`N` and `/` keyboard shortcuts are stubbed** — listed in the overlay as "soon" / disabled. Implementing them requires a global `openEnquiryForm()` store action and a global search focus mechanism.
+- **`g` arming has no visible indicator** — pressing `g` outside an input arms the goto sequence for 1s with no on-screen feedback. A future enhancement could add a toast or bottom-bar hint.
+- **Tasks filter is partially client-side** — `priority`, `search`, `status` filters apply via useMemo over the API response (which is filtered by `assigneeId` server-side). For datasets >100 tasks, some tasks may be missing from filtered results.
+- **CSV Import could add "skip duplicates" toggle + progress bar** — currently insert-only creates duplicates on re-import; large imports (>500 rows) could approach 30s transaction timeout.
+- **PDF export caps at 100 enquiries** and uses jspdf's default Helvetica which doesn't render ₹ (INR symbol) — appears as "Rs" or placeholder. Could embed a Unicode TTF font for proper ₹ rendering.
+- **Mobile swipe-to-navigate** between views — UX enhancement not yet implemented.
+- **Onboarding tour / first-time-user walkthrough** — not yet implemented.

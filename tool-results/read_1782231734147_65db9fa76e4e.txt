@@ -1,0 +1,789 @@
+     1→"use client";
+     2→
+     3→// MSIH CRM V1.0 — Shared UI building blocks
+     4→// Developer: Manoj Dore
+     5→
+     6→import { useEffect, useState } from "react";
+     7→import { cn } from "@/lib/utils";
+     8→import { Card } from "@/components/ui/card";
+     9→import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
+    10→import { statusColor, roleColor } from "@/lib/api-client";
+    11→import type { LucideIcon } from "lucide-react";
+    12→import { ArrowUp } from "lucide-react";
+    13→import type { ReactNode } from "react";
+    14→
+    15→/* ---------- KPI Card ---------- */
+    16→export function KpiCard({
+    17→  label,
+    18→  value,
+    19→  icon: Icon,
+    20→  hint,
+    21→  accent = "blue",
+    22→  trend,
+    23→  spark,
+    24→}: {
+    25→  label: string;
+    26→  value: ReactNode;
+    27→  icon: LucideIcon;
+    28→  hint?: string;
+    29→  accent?: "blue" | "emerald" | "amber" | "red" | "violet" | "cyan" | "slate";
+    30→  trend?: { value: number; up: boolean };
+    31→  spark?: number[]; // optional mini-trend data (e.g. last 7 days)
+    32→}) {
+    33→  const accents: Record<string, { ring: string; bar: string; glow: string }> = {
+    34→    blue: { ring: "from-sky-500/15 to-sky-500/0 text-sky-600 dark:text-sky-400 ring-sky-500/25", bar: "bg-sky-500", glow: "group-hover:shadow-sky-500/10" },
+    35→    emerald: { ring: "from-emerald-500/15 to-emerald-500/0 text-emerald-600 dark:text-emerald-400 ring-emerald-500/25", bar: "bg-emerald-500", glow: "group-hover:shadow-emerald-500/10" },
+    36→    amber: { ring: "from-amber-500/15 to-amber-500/0 text-amber-600 dark:text-amber-400 ring-amber-500/25", bar: "bg-amber-500", glow: "group-hover:shadow-amber-500/10" },
+    37→    red: { ring: "from-red-500/15 to-red-500/0 text-red-600 dark:text-red-400 ring-red-500/25", bar: "bg-red-500", glow: "group-hover:shadow-red-500/10" },
+    38→    violet: { ring: "from-violet-500/15 to-violet-500/0 text-violet-600 dark:text-violet-400 ring-violet-500/25", bar: "bg-violet-500", glow: "group-hover:shadow-violet-500/10" },
+    39→    cyan: { ring: "from-cyan-500/15 to-cyan-500/0 text-cyan-600 dark:text-cyan-400 ring-cyan-500/25", bar: "bg-cyan-500", glow: "group-hover:shadow-cyan-500/10" },
+    40→    slate: { ring: "from-slate-500/15 to-slate-500/0 text-slate-600 dark:text-slate-400 ring-slate-500/25", bar: "bg-slate-500", glow: "group-hover:shadow-slate-500/10" },
+    41→  };
+    42→  const a = accents[accent];
+    43→  // build mini sparkline bars
+    44→  const sparkData = spark && spark.length > 1 ? spark : null;
+    45→  const sparkMax = sparkData ? Math.max(...sparkData, 1) : 0;
+    46→  return (
+    47→    <Card className={cn("group relative overflow-hidden p-5 gap-0 transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5", a.glow)}>
+    48→      {/* Decorative gradient orb in top-right */}
+    49→      <div className={cn("pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-gradient-to-br opacity-40 blur-2xl transition-opacity duration-300 group-hover:opacity-70", a.ring)} />
+    50→      <div className="relative flex items-start justify-between gap-3">
+    51→        <div className="min-w-0">
+    52→          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+    53→          <p className="mt-2 text-2xl font-bold tracking-tight text-foreground truncate">{value}</p>
+    54→          {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+    55→          {trend && (
+    56→            <p className={cn("mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-semibold", trend.up ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-red-500/10 text-red-600 dark:text-red-400")}>
+    57→              <span aria-hidden>{trend.up ? "▲" : "▼"}</span> {Math.abs(trend.value)}% <span className="font-normal text-muted-foreground">vs last period</span>
+    58→            </p>
+    59→          )}
+    60→        </div>
+    61→        <div className={cn("shrink-0 rounded-xl bg-gradient-to-b p-2.5 ring-1 transition-transform duration-300 group-hover:scale-105", a.ring)}>
+    62→          <Icon className="h-5 w-5" />
+    63→        </div>
+    64→      </div>
+    65→      {/* Sparkline bars */}
+    66→      {sparkData && (
+    67→        <div className="relative mt-3 flex h-8 items-end gap-0.5" aria-hidden>
+    68→          {sparkData.map((v, i) => (
+    69→            <div
+    70→              key={i}
+    71→              className={cn("flex-1 rounded-sm opacity-70 transition-all duration-300 group-hover:opacity-100", a.bar)}
+    72→              style={{ height: `${Math.max(8, (v / sparkMax) * 100)}%` }}
+    73→            />
+    74→          ))}
+    75→        </div>
+    76→      )}
+    77→    </Card>
+    78→  );
+    79→}
+    80→
+    81→/* ---------- Status Badge ---------- */
+    82→export function StatusBadge({ status }: { status: string }) {
+    83→  return (
+    84→    <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", statusColor(status))}>
+    85→      {status?.replace(/_/g, " ")}
+    86→    </span>
+    87→  );
+    88→}
+    89→
+    90→/* ---------- Role Badge ---------- */
+    91→export function RoleBadge({ role }: { role: string }) {
+    92→  return (
+    93→    <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", roleColor(role))}>
+    94→      {role?.replace(/_/g, " ")}
+    95→    </span>
+    96→  );
+    97→}
+    98→
+    99→/* ---------- Page Header ---------- */
+   100→export function PageHeader({
+   101→  title,
+   102→  description,
+   103→  icon: Icon,
+   104→  actions,
+   105→  accent = "primary",
+   106→}: {
+   107→  title: string;
+   108→  description?: string;
+   109→  icon?: LucideIcon;
+   110→  actions?: ReactNode;
+   111→  /** Visual accent for the icon tile. Use "primary" for sky (default), or a specific hue. */
+   112→  accent?: "primary" | "emerald" | "amber" | "violet" | "rose" | "cyan";
+   113→}) {
+   114→  const accentMap: Record<string, { tile: string; line: string }> = {
+   115→    primary: {
+   116→      tile: "from-sky-500/20 via-sky-500/10 to-sky-500/0 text-sky-600 dark:text-sky-400 ring-sky-500/25",
+   117→      line: "from-sky-500/40 via-sky-500/10 to-transparent",
+   118→    },
+   119→    emerald: {
+   120→      tile: "from-emerald-500/20 via-emerald-500/10 to-emerald-500/0 text-emerald-600 dark:text-emerald-400 ring-emerald-500/25",
+   121→      line: "from-emerald-500/40 via-emerald-500/10 to-transparent",
+   122→    },
+   123→    amber: {
+   124→      tile: "from-amber-500/20 via-amber-500/10 to-amber-500/0 text-amber-600 dark:text-amber-400 ring-amber-500/25",
+   125→      line: "from-amber-500/40 via-amber-500/10 to-transparent",
+   126→    },
+   127→    violet: {
+   128→      tile: "from-violet-500/20 via-violet-500/10 to-violet-500/0 text-violet-600 dark:text-violet-400 ring-violet-500/25",
+   129→      line: "from-violet-500/40 via-violet-500/10 to-transparent",
+   130→    },
+   131→    rose: {
+   132→      tile: "from-rose-500/20 via-rose-500/10 to-rose-500/0 text-rose-600 dark:text-rose-400 ring-rose-500/25",
+   133→      line: "from-rose-500/40 via-rose-500/10 to-transparent",
+   134→    },
+   135→    cyan: {
+   136→      tile: "from-cyan-500/20 via-cyan-500/10 to-cyan-500/0 text-cyan-600 dark:text-cyan-400 ring-cyan-500/25",
+   137→      line: "from-cyan-500/40 via-cyan-500/10 to-transparent",
+   138→    },
+   139→  };
+   140→  const a = accentMap[accent];
+   141→  return (
+   142→    <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   143→      {/* Subtle gradient divider line under header */}
+   144→      <div
+   145→        className={cn(
+   146→          "pointer-events-none absolute -bottom-2 left-0 right-0 h-px bg-gradient-to-r",
+   147→          a.line
+   148→        )}
+   149→        aria-hidden
+   150→      />
+   151→      <div className="flex items-start gap-3">
+   152→        {Icon && (
+   153→          <div
+   154→            className={cn(
+   155→              "relative shrink-0 overflow-hidden rounded-xl bg-gradient-to-br p-2.5 ring-1 shadow-sm transition-transform duration-300 hover:scale-105",
+   156→              a.tile
+   157→            )}
+   158→          >
+   159→            {/* Inner highlight */}
+   160→            <div className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/15 to-transparent" aria-hidden />
+   161→            <Icon className="relative h-5 w-5" />
+   162→          </div>
+   163→        )}
+   164→        <div>
+   165→          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">{title}</h1>
+   166→          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+   167→        </div>
+   168→      </div>
+   169→      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+   170→    </div>
+   171→  );
+   172→}
+   173→
+   174→/* ---------- Empty State ---------- */
+   175→export function EmptyState({
+   176→  icon: Icon,
+   177→  title,
+   178→  description,
+   179→  action,
+   180→}: {
+   181→  icon: LucideIcon;
+   182→  title: string;
+   183→  description?: string;
+   184→  action?: ReactNode;
+   185→}) {
+   186→  return (
+   187→    <div className="relative flex flex-col items-center justify-center gap-3 overflow-hidden rounded-xl border border-dashed border-muted-foreground/30 py-16 text-center">
+   188→      {/* Subtle radial backdrop */}
+   189→      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-muted/40 via-transparent to-muted/20" aria-hidden />
+   190→      {/* Dotted grid pattern */}
+   191→      <div
+   192→        className="pointer-events-none absolute inset-0 opacity-[0.4]"
+   193→        aria-hidden
+   194→        style={{
+   195→          backgroundImage:
+   196→            "radial-gradient(circle, hsl(var(--muted-foreground) / 0.15) 1px, transparent 1px)",
+   197→          backgroundSize: "16px 16px",
+   198→        }}
+   199→      />
+   200→      {/* Primary glow orb */}
+   201→      <div className="pointer-events-none absolute left-1/2 top-1/2 h-32 w-32 -translate-x-1/2 -translate-y-[120%] rounded-full bg-primary/5 blur-2xl" aria-hidden />
+   202→      {/* Secondary smaller orb */}
+   203→      <div className="pointer-events-none absolute right-1/4 bottom-1/4 h-16 w-16 rounded-full bg-violet-500/5 blur-xl" aria-hidden />
+   204→      <div className="relative rounded-2xl bg-gradient-to-b from-muted to-muted/50 p-4 text-muted-foreground ring-1 ring-muted-foreground/10 shadow-sm">
+   205→        <Icon className="h-7 w-7" />
+   206→      </div>
+   207→      <div className="relative">
+   208→        <p className="font-semibold text-foreground">{title}</p>
+   209→        {description && <p className="mt-1 text-sm text-muted-foreground max-w-sm">{description}</p>}
+   210→      </div>
+   211→      {action && <div className="relative">{action}</div>}
+   212→    </div>
+   213→  );
+   214→}
+   215→
+   216→/* ---------- Loading ---------- */
+   217→export function Loading({ label = "Loading…" }: { label?: string }) {
+   218→  return (
+   219→    <div className="flex items-center justify-center gap-3 py-20">
+   220→      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+   221→      <span className="text-sm text-muted-foreground">{label}</span>
+   222→    </div>
+   223→  );
+   224→}
+   225→
+   226→export function CardSkeleton() {
+   227→  return <ShadcnSkeleton className="h-28 w-full rounded-xl" />;
+   228→}
+   229→
+   230→/* ---------- Skeleton primitives ---------- */
+   231→// Re-exported shadcn Skeleton with our muted/60 base. Callers can override via className.
+   232→export function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
+   233→  return <ShadcnSkeleton className={cn("bg-muted/60", className)} {...props} />;
+   234→}
+   235→
+   236→/* KPI card skeleton — icon tile + 2 lines */
+   237→export function KpiSkeleton() {
+   238→  return (
+   239→    <Card className="relative overflow-hidden p-5">
+   240→      <div className="flex items-start justify-between gap-3">
+   241→        <div className="flex-1 space-y-2">
+   242→          <Skeleton className="h-3 w-24" />
+   243→          <Skeleton className="h-7 w-20" />
+   244→          <Skeleton className="h-3 w-16 opacity-70" />
+   245→        </div>
+   246→        <Skeleton className="h-11 w-11 rounded-xl opacity-80" />
+   247→      </div>
+   248→    </Card>
+   249→  );
+   250→}
+   251→
+   252→/* Enquiry/card skeleton — icon tile + company line + 2 metadata lines */
+   253→export function EnquiryCardSkeleton() {
+   254→  return (
+   255→    <Card className="p-4">
+   256→      <div className="flex items-start gap-3">
+   257→        <Skeleton className="h-10 w-10 shrink-0 rounded-lg" />
+   258→        <div className="flex-1 space-y-2">
+   259→          <Skeleton className="h-4 w-3/4" />
+   260→          <Skeleton className="h-3 w-1/2 opacity-80" />
+   261→          <div className="flex flex-wrap gap-2 pt-1">
+   262→            <Skeleton className="h-4 w-16 rounded-full opacity-70" />
+   263→            <Skeleton className="h-4 w-12 rounded-full opacity-60" />
+   264→          </div>
+   265→          <Skeleton className="h-3 w-2/3 opacity-70" />
+   266→        </div>
+   267→      </div>
+   268→      <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2">
+   269→        <Skeleton className="h-3 w-20 opacity-70" />
+   270→        <Skeleton className="h-3 w-24 opacity-60" />
+   271→      </div>
+   272→    </Card>
+   273→  );
+   274→}
+   275→
+   276→/* Row skeleton for table-style views */
+   277→export function TableRowSkeleton({ cols = 4 }: { cols?: number }) {
+   278→  return (
+   279→    <div className="flex items-center gap-3 border-b border-border/60 px-4 py-3">
+   280→      <Skeleton className="h-4 w-4 rounded" />
+   281→      {Array.from({ length: cols }).map((_, i) => (
+   282→        <Skeleton
+   283→          key={i}
+   284→          className="h-4 opacity-80"
+   285→          style={{ flex: 1, maxWidth: 120 + (i * 20) }}
+   286→        />
+   287→      ))}
+   288→    </div>
+   289→  );
+   290→}
+   291→
+   292→/* Chart placeholder — rounded box with subtle pulse + fake axes lines */
+   293→export function ChartSkeleton({ height = 260, className }: { height?: number; className?: string }) {
+   294→  return (
+   295→    <Card className={cn("p-4", className)}>
+   296→      <div className="mb-3 flex items-center justify-between">
+   297→        <div className="space-y-1.5">
+   298→          <Skeleton className="h-4 w-32" />
+   299→          <Skeleton className="h-3 w-20 opacity-70" />
+   300→        </div>
+   301→        <Skeleton className="h-7 w-7 rounded-md opacity-60" />
+   302→      </div>
+   303→      <div className="relative rounded-lg bg-muted/20" style={{ height }}>
+   304→        {/* Fake axes */}
+   305→        <div className="absolute left-0 top-0 h-full w-px bg-muted-foreground/20" />
+   306→        <div className="absolute bottom-0 left-0 h-px w-full bg-muted-foreground/20" />
+   307→        {/* Fake grid lines */}
+   308→        {[0.25, 0.5, 0.75].map((p) => (
+   309→          <div
+   310→            key={p}
+   311→            className="absolute left-0 w-full border-t border-dashed border-muted-foreground/10"
+   312→            style={{ top: `${p * 100}%` }}
+   313→          />
+   314→        ))}
+   315→        {/* Fake area bars — staggered heights + opacities for a natural look */}
+   316→        <div className="absolute inset-0 flex items-end justify-around gap-1.5 px-2 pb-1 pt-6">
+   317→          {[40, 65, 50, 80, 60, 90, 70, 55, 75, 45, 85, 60].map((h, i) => (
+   318→            <Skeleton
+   319→              key={i}
+   320→              className="flex-1 rounded-t-sm"
+   321→              style={{ height: `${h}%`, opacity: 0.35 + (h / 200) }}
+   322→            />
+   323→          ))}
+   324→        </div>
+   325→      </div>
+   326→    </Card>
+   327→  );
+   328→}
+   329→
+   330→/* Kanban column skeleton — column header + N placeholder cards */
+   331→export function KanbanColumnSkeleton() {
+   332→  return (
+   333→    <div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/30 p-3 border-t-4 border-t-slate-300">
+   334→      <div className="flex items-center justify-between pb-2">
+   335→        <div className="flex items-center gap-2">
+   336→          <Skeleton className="h-2 w-2 rounded-full" />
+   337→          <Skeleton className="h-4 w-20" />
+   338→        </div>
+   339→        <Skeleton className="h-5 w-6 rounded-full opacity-70" />
+   340→      </div>
+   341→      <div className="flex flex-col gap-2">
+   342→        {Array.from({ length: 3 }).map((_, i) => (
+   343→          <Card key={i} className="p-3">
+   344→            <div className="flex items-start justify-between gap-2">
+   345→              <Skeleton className="h-4 flex-1" />
+   346→              <Skeleton className="h-4 w-12 rounded opacity-70" />
+   347→            </div>
+   348→            <Skeleton className="mt-2 h-3 w-3/4 opacity-80" />
+   349→            <div className="mt-2 flex gap-2">
+   350→              <Skeleton className="h-3 w-16 opacity-70" />
+   351→              <Skeleton className="h-3 w-12 opacity-60" />
+   352→            </div>
+   353→          </Card>
+   354→        ))}
+   355→      </div>
+   356→    </div>
+   357→  );
+   358→}
+   359→
+   360→/* List skeleton — renders N card/row skeletons */
+   361→export function ListSkeleton({
+   362→  count = 5,
+   363→  variant = "card",
+   364→}: {
+   365→  count?: number;
+   366→  variant?: "card" | "row";
+   367→}) {
+   368→  if (variant === "row") {
+   369→    return (
+   370→      <Card className="overflow-hidden p-0">
+   371→        <div className="flex items-center gap-3 border-b border-border/60 bg-muted/30 px-4 py-2.5">
+   372→          {Array.from({ length: 5 }).map((_, i) => (
+   373→            <Skeleton key={i} className="h-3 flex-1 opacity-70" style={{ maxWidth: 120 + i * 20 }} />
+   374→          ))}
+   375→        </div>
+   376→        {Array.from({ length: count }).map((_, i) => (
+   377→          <TableRowSkeleton key={i} cols={4} />
+   378→        ))}
+   379→      </Card>
+   380→    );
+   381→  }
+   382→  return (
+   383→    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   384→      {Array.from({ length: count }).map((_, i) => (
+   385→        <EnquiryCardSkeleton key={i} />
+   386→      ))}
+   387→    </div>
+   388→  );
+   389→}
+   390→
+   391→/* Filter bar skeleton */
+   392→function FilterBarSkeleton() {
+   393→  return (
+   394→    <Card className="p-4">
+   395→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   396→        <div className="flex gap-1.5">
+   397→          {Array.from({ length: 5 }).map((_, i) => (
+   398→            <Skeleton key={i} className="h-8 w-20 rounded-md opacity-80" />
+   399→          ))}
+   400→        </div>
+   401→        <Skeleton className="h-9 w-64 rounded-md opacity-80" />
+   402→      </div>
+   403→    </Card>
+   404→  );
+   405→}
+   406→
+   407→/* Full-page skeleton — KPI row + filter bar + list */
+   408→export function PageSkeleton({
+   409→  variant = "list",
+   410→}: {
+   411→  variant?: "dashboard" | "list" | "kanban" | "calendar" | "grid";
+   412→}) {
+   413→  if (variant === "dashboard") {
+   414→    return (
+   415→      <div className="space-y-6">
+   416→        {/* Greeting skeleton */}
+   417→        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+   418→          <div className="space-y-2">
+   419→            <Skeleton className="h-7 w-64" />
+   420→            <Skeleton className="h-4 w-96 opacity-80" />
+   421→          </div>
+   422→          <Skeleton className="h-9 w-36 rounded-md opacity-80" />
+   423→        </div>
+   424→        {/* KPI row */}
+   425→        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+   426→          {Array.from({ length: 8 }).map((_, i) => (
+   427→            <KpiSkeleton key={i} />
+   428→          ))}
+   429→        </div>
+   430→        {/* Charts row 1 */}
+   431→        <div className="grid gap-4 lg:grid-cols-3">
+   432→          <ChartSkeleton height={260} className="lg:col-span-2" />
+   433→          <ChartSkeleton height={260} />
+   434→        </div>
+   435→        {/* Charts row 2 */}
+   436→        <div className="grid gap-4 lg:grid-cols-3">
+   437→          <ChartSkeleton height={260} />
+   438→          <ChartSkeleton height={260} className="lg:col-span-2" />
+   439→        </div>
+   440→      </div>
+   441→    );
+   442→  }
+   443→
+   444→  if (variant === "kanban") {
+   445→    return (
+   446→      <div className="space-y-5">
+   447→        {/* Page header */}
+   448→        <div className="flex items-center justify-between gap-3">
+   449→          <div className="space-y-2">
+   450→            <Skeleton className="h-6 w-32" />
+   451→            <Skeleton className="h-4 w-72 opacity-80" />
+   452→          </div>
+   453→          <Skeleton className="h-9 w-28 rounded-md opacity-80" />
+   454→        </div>
+   455→        {/* KPI row */}
+   456→        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   457→          {Array.from({ length: 4 }).map((_, i) => (
+   458→            <KpiSkeleton key={i} />
+   459→          ))}
+   460→        </div>
+   461→        {/* Kanban columns */}
+   462→        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+   463→          {Array.from({ length: 4 }).map((_, i) => (
+   464→            <KanbanColumnSkeleton key={i} />
+   465→          ))}
+   466→        </div>
+   467→      </div>
+   468→    );
+   469→  }
+   470→
+   471→  if (variant === "calendar") {
+   472→    return (
+   473→      <div className="space-y-5">
+   474→        {/* Page header */}
+   475→        <div className="flex items-center justify-between gap-3">
+   476→          <div className="space-y-2">
+   477→            <Skeleton className="h-6 w-28" />
+   478→            <Skeleton className="h-4 w-56 opacity-80" />
+   479→          </div>
+   480→          <div className="flex gap-2">
+   481→            {Array.from({ length: 3 }).map((_, i) => (
+   482→              <Skeleton key={i} className="h-8 w-10 rounded-md opacity-80" />
+   483→            ))}
+   484→          </div>
+   485→        </div>
+   486→        {/* Month header + stats */}
+   487→        <div className="flex items-center justify-between">
+   488→          <Skeleton className="h-8 w-40" />
+   489→          <div className="flex gap-2">
+   490→            {Array.from({ length: 3 }).map((_, i) => (
+   491→              <Skeleton key={i} className="h-6 w-24 rounded-full opacity-80" />
+   492→            ))}
+   493→          </div>
+   494→        </div>
+   495→        {/* Calendar grid */}
+   496→        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+   497→          <Card className="p-3">
+   498→            <div className="grid grid-cols-7 gap-1">
+   499→              {Array.from({ length: 7 }).map((_, i) => (
+   500→                <Skeleton key={i} className="mx-auto h-3 w-8 opacity-70" />
+   501→              ))}
+   502→              {Array.from({ length: 35 }).map((_, i) => (
+   503→                <Skeleton key={i} className="aspect-square rounded-lg opacity-50" />
+   504→              ))}
+   505→            </div>
+   506→          </Card>
+   507→          <Card className="p-4">
+   508→            <Skeleton className="h-5 w-32" />
+   509→            <Skeleton className="mt-2 h-3 w-40 opacity-70" />
+   510→            <div className="mt-4 space-y-2">
+   511→              {Array.from({ length: 4 }).map((_, i) => (
+   512→                <Skeleton key={i} className="h-16 w-full rounded-lg opacity-70" />
+   513→              ))}
+   514→            </div>
+   515→          </Card>
+   516→        </div>
+   517→      </div>
+   518→    );
+   519→  }
+   520→
+   521→  if (variant === "grid") {
+   522→    return (
+   523→      <div className="space-y-5">
+   524→        {/* Page header */}
+   525→        <div className="flex items-center justify-between gap-3">
+   526→          <div className="space-y-2">
+   527→            <Skeleton className="h-6 w-32" />
+   528→            <Skeleton className="h-4 w-72 opacity-80" />
+   529→          </div>
+   530→          <Skeleton className="h-9 w-28 rounded-md opacity-80" />
+   531→        </div>
+   532→        {/* KPI row */}
+   533→        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   534→          {Array.from({ length: 4 }).map((_, i) => (
+   535→            <KpiSkeleton key={i} />
+   536→          ))}
+   537→        </div>
+   538→        {/* Filter bar */}
+   539→        <FilterBarSkeleton />
+   540→        {/* Grid of cards */}
+   541→        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+   542→          {Array.from({ length: 9 }).map((_, i) => (
+   543→            <Card key={i} className="p-0 overflow-hidden">
+   544→              <Skeleton className="h-32 w-full opacity-70" />
+   545→              <div className="p-4 space-y-2">
+   546→                <Skeleton className="h-4 w-3/4" />
+   547→                <Skeleton className="h-3 w-full opacity-80" />
+   548→                <Skeleton className="h-3 w-2/3 opacity-70" />
+   549→                <div className="flex gap-1.5 pt-1">
+   550→                  <Skeleton className="h-4 w-16 rounded-full opacity-60" />
+   551→                  <Skeleton className="h-4 w-12 rounded-full opacity-50" />
+   552→                </div>
+   553→                <div className="flex items-center justify-between pt-3">
+   554→                  <Skeleton className="h-5 w-20 opacity-70" />
+   555→                  <Skeleton className="h-7 w-16 rounded-md opacity-80" />
+   556→                </div>
+   557→              </div>
+   558→            </Card>
+   559→          ))}
+   560→        </div>
+   561→      </div>
+   562→    );
+   563→  }
+   564→
+   565→  // Default: list view
+   566→  return (
+   567→    <div className="space-y-5">
+   568→      {/* Page header */}
+   569→      <div className="flex items-center justify-between gap-3">
+   570→        <div className="space-y-2">
+   571→          <Skeleton className="h-6 w-32" />
+   572→          <Skeleton className="h-4 w-72 opacity-80" />
+   573→        </div>
+   574→        <Skeleton className="h-9 w-28 rounded-md opacity-80" />
+   575→      </div>
+   576→      {/* KPI row */}
+   577→      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   578→        {Array.from({ length: 4 }).map((_, i) => (
+   579→          <KpiSkeleton key={i} />
+   580→        ))}
+   581→      </div>
+   582→      {/* Filter bar */}
+   583→      <FilterBarSkeleton />
+   584→      {/* List of cards */}
+   585→      <ListSkeleton count={6} variant="card" />
+   586→    </div>
+   587→  );
+   588→}
+   589→
+   590→/* ---------- Scroll-to-Top floating button ---------- */
+   591→// Appears when the main scroll container (id="main-content") scrolls past 400px.
+   592→// Fixed to bottom-right at z-40, bottom-20 to clear the sticky footer.
+   593→export function ScrollToTopButton() {
+   594→  const [visible, setVisible] = useState(false);
+   595→
+   596→  useEffect(() => {
+   597→    const main = document.getElementById("main-content");
+   598→    if (!main) return;
+   599→    const onScroll = () => setVisible(main.scrollTop > 400);
+   600→    main.addEventListener("scroll", onScroll, { passive: true });
+   601→    onScroll();
+   602→    return () => main.removeEventListener("scroll", onScroll);
+   603→  }, []);
+   604→
+   605→  const scrollTop = () => {
+   606→    const main = document.getElementById("main-content");
+   607→    if (main) main.scrollTo({ top: 0, behavior: "smooth" });
+   608→    else window.scrollTo({ top: 0, behavior: "smooth" });
+   609→  };
+   610→
+   611→  if (!visible) return null;
+   612→
+   613→  return (
+   614→    <button
+   615→      type="button"
+   616→      onClick={scrollTop}
+   617→      aria-label="Scroll to top"
+   618→      className="fixed bottom-20 right-4 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full bg-primary p-3 text-primary-foreground shadow-lg transition-all hover:bg-primary/90 hover:scale-110 animate-in fade-in slide-in-from-bottom-4 duration-300 sm:right-6"
+   619→    >
+   620→      <ArrowUp className="h-5 w-5" />
+   621→    </button>
+   622→  );
+   623→}
+   624→
+   625→/* ---------- Chart Card ---------- */
+   626→export function ChartCard({
+   627→  title,
+   628→  description,
+   629→  icon: Icon,
+   630→  children,
+   631→  className,
+   632→  action,
+   633→}: {
+   634→  title: string;
+   635→  description?: string;
+   636→  icon?: LucideIcon;
+   637→  children: ReactNode;
+   638→  className?: string;
+   639→  action?: ReactNode;
+   640→}) {
+   641→  return (
+   642→    <Card className={cn("p-4 gap-0", className)}>
+   643→      <div className="mb-3 flex items-start justify-between gap-2">
+   644→        <div className="flex items-center gap-2">
+   645→          {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+   646→          <div>
+   647→            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+   648→            {description && <p className="text-xs text-muted-foreground">{description}</p>}
+   649→          </div>
+   650→        </div>
+   651→        {action}
+   652→      </div>
+   653→      {children}
+   654→    </Card>
+   655→  );
+   656→}
+   657→
+   658→/* ---------- Section Card ---------- */
+   659→export function SectionCard({
+   660→  title,
+   661→  description,
+   662→  icon: Icon,
+   663→  children,
+   664→  className,
+   665→  action,
+   666→}: {
+   667→  title: string;
+   668→  description?: string;
+   669→  icon?: LucideIcon;
+   670→  children: ReactNode;
+   671→  className?: string;
+   672→  action?: ReactNode;
+   673→}) {
+   674→  return (
+   675→    <Card className={cn("relative overflow-hidden p-4 gap-0", className)}>
+   676→      {/* Subtle top-edge highlight */}
+   677→      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-foreground/5 to-transparent" aria-hidden />
+   678→      <div className="mb-3 flex items-center justify-between gap-2">
+   679→        <div className="flex items-center gap-2">
+   680→          {Icon && (
+   681→            <div className="rounded-md bg-gradient-to-br from-muted-foreground/15 to-muted-foreground/5 p-1 text-muted-foreground ring-1 ring-muted-foreground/10">
+   682→              <Icon className="h-3.5 w-3.5" />
+   683→            </div>
+   684→          )}
+   685→          <div>
+   686→            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+   687→            {description && <p className="text-xs text-muted-foreground">{description}</p>}
+   688→          </div>
+   689→        </div>
+   690→        {action}
+   691→      </div>
+   692→      {children}
+   693→    </Card>
+   694→  );
+   695→}
+   696→
+   697→/* ---------- Timeline ---------- */
+   698→/**
+   699→ * Vertical timeline component for activity / event feeds.
+   700→ * Each item has a colored icon, title, content, meta line, and optional actions.
+   701→ */
+   702→export type TimelineTone = "sky" | "emerald" | "amber" | "violet" | "rose" | "slate" | "cyan";
+   703→
+   704→export interface TimelineItemData {
+   705→  id: string;
+   706→  icon: LucideIcon;
+   707→  tone?: TimelineTone;
+   708→  title: ReactNode;
+   709→  content?: ReactNode;
+   710→  meta?: ReactNode;
+   711→  timestamp?: string;
+   712→  fullTimestamp?: string;
+   713→  actions?: ReactNode;
+   714→}
+   715→
+   716→export function Timeline({ items }: { items: TimelineItemData[] }) {
+   717→  const toneMap: Record<TimelineTone, string> = {
+   718→    sky: "bg-sky-500/15 text-sky-600 dark:text-sky-400 ring-sky-500/25",
+   719→    emerald: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-emerald-500/25",
+   720→    amber: "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-amber-500/25",
+   721→    violet: "bg-violet-500/15 text-violet-600 dark:text-violet-400 ring-violet-500/25",
+   722→    rose: "bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-rose-500/25",
+   723→    slate: "bg-slate-500/15 text-slate-600 dark:text-slate-400 ring-slate-500/25",
+   724→    cyan: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 ring-cyan-500/25",
+   725→  };
+   726→
+   727→  if (!items.length) {
+   728→    return (
+   729→      <p className="py-6 text-center text-sm text-muted-foreground">No activity yet</p>
+   730→    );
+   731→  }
+   732→
+   733→  return (
+   734→    <ol className="relative space-y-3" role="list" aria-label="Activity timeline">
+   735→      {/* Vertical connector line */}
+   736→      <div
+   737→        className="pointer-events-none absolute left-[15px] top-2 bottom-2 w-px bg-gradient-to-b from-border/60 via-border/40 to-transparent"
+   738→        aria-hidden
+   739→      />
+   740→      {items.map((item) => {
+   741→        const tone = item.tone || "slate";
+   742→        const ItemIcon = item.icon;
+   743→        return (
+   744→          <li
+   745→            key={item.id}
+   746→            className="group relative flex gap-3 pl-0"
+   747→            role="listitem"
+   748→          >
+   749→            <div
+   750→              className={cn(
+   751→                "relative z-10 shrink-0 rounded-full p-1.5 ring-1 backdrop-blur-sm transition-transform duration-200 group-hover:scale-110",
+   752→                toneMap[tone]
+   753→              )}
+   754→            >
+   755→              <ItemIcon className="h-3.5 w-3.5" />
+   756→            </div>
+   757→            <div className="min-w-0 flex-1 rounded-lg border border-border/60 bg-card/40 p-2.5 transition-colors group-hover:bg-muted/30">
+   758→              <div className="flex items-start justify-between gap-2">
+   759→                <div className="min-w-0">
+   760→                  <p className="text-xs font-semibold text-foreground">{item.title}</p>
+   761→                  {item.content && (
+   762→                    <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-words">
+   763→                      {item.content}
+   764→                    </p>
+   765→                  )}
+   766→                  {item.meta && (
+   767→                    <p className="mt-1 text-[10px] text-muted-foreground/80">{item.meta}</p>
+   768→                  )}
+   769→                </div>
+   770→                <div className="flex shrink-0 flex-col items-end gap-1">
+   771→                  {item.timestamp && (
+   772→                    <span
+   773→                      className="text-[10px] text-muted-foreground"
+   774→                      title={item.fullTimestamp || item.timestamp}
+   775→                    >
+   776→                      {item.timestamp}
+   777→                    </span>
+   778→                  )}
+   779→                  {item.actions}
+   780→                </div>
+   781→              </div>
+   782→            </div>
+   783→          </li>
+   784→        );
+   785→      })}
+   786→    </ol>
+   787→  );
+   788→}
+   789→

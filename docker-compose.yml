@@ -1,0 +1,27 @@
+# MSIH CRM V1.0 — Docker Compose
+# One-command setup: docker compose up --build
+# Then open http://localhost:3000
+# Login: superadmin@mettechnik.com / admin@123
+
+services:
+  msih-crm:
+    build: .
+    container_name: msih-crm
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist the SQLite database across container restarts
+      - msih-db:/app/db
+      # Mount source for live editing (optional, comment out for production)
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+    environment:
+      - DATABASE_URL=file:./db/custom.db
+      - NEXTAUTH_SECRET=msih-crm-dev-secret-change-this-in-production-2026
+      - NEXTAUTH_URL=http://localhost:3000
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+    restart: unless-stopped
+    command: sh -c "npx prisma generate && npx prisma db push && npx tsx prisma/seed.ts || true && npx tsx prisma/seed-extras.ts || true && npm run dev"
+
+volumes:
+  msih-db:

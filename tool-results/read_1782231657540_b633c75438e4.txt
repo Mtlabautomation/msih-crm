@@ -1,0 +1,250 @@
+     1→   900→  - agent-browser end-to-end test: full success — 3-row CSV uploaded, parsed, auto-mapped, reviewed, imported. Enquiries count went from 40 → 43. Imported row visible in Enquiries view with correct data (company, contact, mobile, email, product, budget, city, state, status=NEW, enquiryNumber=ENQ-2026-6008, assignedTo=current user).
+     2→   901→- Risks / follow-ups:
+     3→   902→  - For very large imports (>500 rows), the per-row `find-or-create Customer` + `enquiry.create` inside a single transaction could approach the 30s timeout. The endpoint caps at 5000 rows per request; a future enhancement could batch customer lookups or use `createMany` for enquiries when customer lookup is pre-resolved.
+     4→   903→  - The wizard does not yet support updating existing records (upsert) — every import creates new rows. If a CSV is imported twice, duplicate enquiries will be created (each with a new enquiryNumber). A future enhancement could add a "skip duplicates" or "update existing" toggle.
+     5→   904→  - PDF / PPT export cards in the Export section remain stubs (show "available in next update" toast) — outside the scope of this task.
+     6→   905→
+     7→   906→---
+     8→   907→Task ID: 7-b
+     9→   908→Agent: full-stack-developer
+    10→   909→Task: Card/Table view toggle on Customers + Quotations + Customer 360 enhancements (KPI strip, Edit Dialog, enhanced Activity Timeline, Enquiries tab summary)
+    11→   910→
+    12→   911→Work Log:
+    13→   912→- Read worklog.md (Tasks 1 → 7-a) and reference files: `enquiries-view.tsx` (Card/Table toggle pattern via `viewMode`, `localStorage`, `aria-pressed`, `LayoutGrid`/`List` icons, animated left accent stripe), `customers-view.tsx` (current state), `quotations-view.tsx` (current state), `shared.tsx` (KpiCard, SectionCard, EmptyState, ListSkeleton), `api-client.ts` (api, fmtINR, fmtDate, fmtDateTime, timeAgo helpers).
+    14→   913→- Verified backend already had required endpoints (DO NOT TOUCH per task rules):
+    15→   914→  * `PATCH /api/customers/[id]` — accepts partial body, tracks changes, logs audit.
+    16→   915→  * `DELETE /api/activities/[id]` — ADMIN+ or activity creator only (returns 403 otherwise).
+    17→   916→  * `POST /api/activities` — supports `{type, entity:"customer", entityId, description}`.
+    18→   917→  * `GET /api/customers/[id]` — returns customer with `enquiries` (incl. `assignedExecutive` + `product`) and `activities` (incl. `user`).
+    19→   918→- Reviewed shadcn `table.tsx`, `alert-dialog.tsx`, `dialog.tsx`, `sheet.tsx`, `tabs.tsx` for component APIs.
+    20→   919→
+    21→   920→**Part 1: Customers view (`src/components/app/views/customers-view.tsx`) — full rewrite**
+    22→   921→- Added `viewMode` state ("card" | "table") with lazy initializer reading `localStorage["msih-customers-view"]` (default: "card"). `toggleViewMode` writes to localStorage. Mirrors Enquiries pattern exactly.
+    23→   922→- Added toggle UI group (LayoutGrid + List icon buttons, 2-button group with `role="group"`, `aria-pressed`, primary-tint when active) next to the search bar. Same styling as Enquiries (8x8 button, `bg-primary/10 text-primary` when active, `hover:bg-muted` when inactive).
+    24→   923→- **Card view polish:** Added `group relative overflow-hidden` + `transition-all duration-200 hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5`. Added animated left accent stripe (`absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-primary/0 group-hover:bg-primary/60`). Avatar scales on hover (`group-hover:scale-105`).
+    25→   924→- **Table view (new):** Responsive table using shadcn `Table`/`TableHeader`/`TableBody`/`TableRow`/`TableCell`/`TableHead`. Columns: Company (with avatar icon tile + email), Contact, Mobile (with Phone icon), Industry (Badge), City, State, Enquiries (right-aligned bold), action arrow. Header cells use `text-xs font-semibold uppercase tracking-wide text-muted-foreground`. Rows clickable (`cursor-pointer hover:bg-muted/40`), with `group-hover:translate-x-1 group-hover:text-primary` ArrowRight animation.
+    26→   925→- **Mobile (md:hidden):** Stacked rows with company bold + contact + mobile + industry badge + city/state. Same clickable behavior.
+    27→   926→- Wrapped both card and table views in existing `PullToRefresh` for parity with Enquiries.
+    28→   927→
+    29→   928→**Part 1.2: Customer 360 Sheet enhancements (in same file)**
+    30→   929→1. **Header KPI strip** (3 mini-stat cards in `grid grid-cols-3 gap-2`): `rounded-lg border bg-muted/30 p-3 text-center`. Shows: Total Enquiries (count from `sel.enquiries.length`), Pipeline Value (`fmtINR(sum of orderValue || budget)`, computed via `useMemo`), Last Activity (`timeAgo` of most recent activity, with `title={fmtDateTime(...)}` for hover). When no activities, shows "—".
+    31→   930→2. **Edit Customer button** in Sheet header: `Button size="sm" variant="outline"` with `Pencil` icon. Visible only when `canEdit` is true (ADMIN+ OR `sel.createdBy === currentUserId`). Opens Edit Dialog with all fields pre-filled.
+    32→   931→3. **Extracted shared `CustomerForm` component** (replaces both `CreateCustomerForm` and any future edit form):
+    33→   932→   - Props: `mode: "create" | "edit"`, `initial?`, `onSubmit`, `loading`, `submitLabel`.
+    34→   933→   - In edit mode, uses `useRef` to capture initial values once on mount, then on submit computes a `diff` of only changed fields (so PATCH only sends what changed). If nothing changed, calls `onSubmit({})` so the parent can just close.
+    35→   934→   - Fields: Company *, Contact Person *, Mobile *, Email, City, State, Industry (select dropdown with `INDUSTRIES`), GSTIN, Website, Address (Textarea). Validation: submit button disabled until company/contactPerson/mobile present.
+    36→   935→   - On edit save: `updateMut.mutate({ id, body: diff })` → on success: toast "Customer updated", `qc.invalidateQueries(["customer", id])` + `["customers"]`, close dialog.
+    37→   936→4. **Enhanced Activity Timeline** (`ActivityTimeline` component, replaces the old flat list):
+    38→   937→   - Container: `relative pl-6` with absolutely-positioned vertical line `absolute left-[14px] top-2 bottom-2 w-px border-l-2 border-border/60`.
+    39→   938→   - Each activity: `relative` wrapper with absolutely-positioned icon circle `absolute -left-6 top-0 z-10 h-7 w-7 rounded-full ring-2 ring-background` overlapping the line.
+    40→   939→   - Type metadata map `ACTIVITY_TYPES`: NOTE → FileText / slate, CALL → Phone / sky, EMAIL → Mail / violet, MEETING → Users / emerald, DOCUMENT → FileText / amber. Each has `tint` (icon circle bg + text color + ring), `dot`, `label`.
+    41→   940→   - Each entry card: rounded-lg border with type badge (colored) + user avatar (initials, 5x5 size) + user name + time (`timeAgo`, with `title={fmtDateTime(createdAt)}` for hover tooltip) + content (`whitespace-pre-wrap`).
+    42→   941→   - Delete button: small X icon top-right (`rounded p-1 hover:bg-red-500/10 hover:text-red-600`). Visible only when `canDelete` (ADMIN+ OR activity creator). Triggers AlertDialog confirmation.
+    43→   942→   - AlertDialog (`AlertDialogContent` with `AlertDialogTitle` "Delete activity?" + `AlertDialogDescription` + `AlertDialogCancel` + `AlertDialogAction` in red). On confirm: `deleteActivityMut.mutate(id)` → DELETE `/api/activities/${id}` → toast "Activity deleted" + invalidate `["customer", id]`. On 403 (Forbidden): toast shows server message verbatim, dialog closes.
+    44→   943→5. **ActivityForm with type pills** (replaces the old `<select>`):
+    45→   944→   - 5 pill buttons (`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium`) for NOTE / CALL / EMAIL / MEETING / DOCUMENT. Each shows the type's icon + label.
+    46→   945→   - Active state: `border-transparent ring-1` + the type's tint classes. Inactive: `border-border bg-background text-muted-foreground hover:bg-muted`.
+    47→   946→   - Each pill has `aria-pressed` + `aria-label="Activity type: X"` + `title`.
+    48→   947→   - Below: Input row (Log an activity… + Add button). Enter key submits (without shift).
+    49→   948→6. **Enquiries tab enhancements:**
+    50→   949→   - Summary line at top: `rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs` showing `"{N} enquiries · {M} converted · ₹{X} total pipeline"` (computed via `useMemo` from `sel.enquiries`).
+    51→   950→   - Each enquiry card already showed product, status, date, budget — **added executive name at the bottom**: `border-t border-border/60 pt-1.5` with small avatar (4x4) showing initials + name. Pulled from `e.assignedExecutive.name`.
+    52→   951→
+    53→   952→**Part 2: Quotations view (`src/components/app/views/quotations-view.tsx`) — full rewrite**
+    54→   953→- Same `viewMode` state pattern, localStorage key `"msih-quotations-view"`, default "card". `toggleViewMode` writes to localStorage.
+    55→   954→- Toggle UI placed in the filters row, after the search bar (`flex items-center gap-2` between search box and toggle group), keeping the status Tabs on the left.
+    56→   955→- **Card view polish:** Added `group relative overflow-hidden` + `transition-all duration-200 hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5`. Added animated left accent stripe (`bg-primary/0 group-hover:bg-primary/60`) — same pattern as Customers/Enquiries.
+    57→   956→- **Table view (new):** 8-column responsive table using shadcn Table components. Columns: Quotation # (font-mono bold), Company (with Building2 icon tile), Product (truncate), Amount (right-aligned `font-bold` + `fmtINR`), Status (colored pill via `qtStatusColor` map), Valid Until (`fmtDate`), Created (`fmtDate`), action arrow. Same header/click/hover behavior as Customers table.
+    58→   957→- **Mobile (md:hidden):** Stacked rows with quotation number bold + status pill, company, product, then bottom row with amount bold + valid date.
+    59→   958→- All existing features preserved: status Tabs filter, search, KPI cards (Total Quotations, Pipeline Value, Accepted, Pending), Create Dialog, detail Sheet (with status update buttons + View Related Enquiry).
+    60→   959→
+    61→   960→**Visual polish applied throughout:**
+    62→   961→- Tailwind gradient utility `bg-gradient-to-br from-sky-500/15 to-violet-500/15` on all avatar/icon tiles.
+    63→   962→- All hover states use `transition-all duration-200`.
+    64→   963→- Color palette: sky (primary), violet (secondary accent), emerald (success), amber (warning), red (danger), slate (neutral). NO indigo, NO blue-600.
+    65→   964→- Mobile-first: table view collapses to stacked rows on `md:hidden` (using `hidden md:block` for the `<Table>` wrapper and `md:hidden` for the stacked fallback).
+    66→   965→
+    67→   966→**Verification:**
+    68→   967→- `bun run lint` → **exit 0** (clean, 0 errors, 0 warnings). Had to fix one React Compiler error: replaced `useMemo(() => ({...f}), [])` with `useRef` for capturing initial form values (the manual memoization with empty deps couldn't be preserved by the compiler — `useRef` is the idiomatic choice for "capture once on mount" anyway).
+    69→   968→- `bunx tsc --noEmit` → **0 errors in touched files** (`customers-view.tsx`, `quotations-view.tsx`). 6 pre-existing errors remain in unrelated files (`examples/websocket/*`, `skills/*`, `src/app/api/ai-assistant/route.ts`, `src/app/api/deletion-requests/[id]/route.ts`) — not my files.
+    70→   969→- Dev log: clean. `GET /api/customers 200`, `GET /api/customers/cust-1 200`, `PATCH /api/customers/cust-1 200 in 94ms`, `DELETE /api/activities/cmqqtfysu001ipf00b4sy49zg 200 in 1112ms`, `GET /api/quotations 200`. No compile errors, no runtime errors.
+    71→   970→
+    72→   971→**agent-browser end-to-end test (full success):**
+    73→   972→1. Opened `http://localhost:3000/` → login screen. Clicked "Super Admin Manoj Dore" quick-login → dashboard loaded.
+    74→   973→2. Navigated to Customers view (sidebar click). Verified: PageHeader "Customers" with New Customer button, 4 KPI cards, search bar, and **Card view / Table view toggle buttons present** with correct `aria-pressed` (Card=true initially).
+    75→   974→3. Card view: 15 customer cards rendered in responsive grid (md:2 cols, xl:3 cols) with company name, contact, mobile, city/industry badge, enquiry count. Hover polish (lift + accent stripe) confirmed via CSS inspection.
+    76→   975→4. **Clicked Table view toggle** → `localStorage["msih-customers-view"] = "table"`, `aria-pressed` flipped (Card=false, Table=true), table element rendered with 8 column headers (Company, Contact, Mobile, Industry, City, State, Enquiries, action). 15 rows. First row showed: `Gamma Tools Pvt Ltd | Amit Patel | 9876543212 | — | Ahmedabad | — | 1 | →`.
+    77→   976→5. **Reloaded page** → bounced back to dashboard (state-based routing). Re-navigated to Customers → view mode restored to **table** (persisted in localStorage). ✓
+    78→   977→6. **Opened Tata Steel customer** (4 enquiries, 2 activities) → 360 Sheet opened.
+    79→   978→   - Header KPI strip rendered: `ENQUIRIES 4 · PIPELINE ₹2,00,000 · LAST ACTIVITY 4h ago`. ✓
+    80→   979→   - Edit button visible in Sheet header (logged in as Super Admin). ✓
+    81→   980→   - Contact Information section with all fields (Contact Person, Mobile, Email, City, State, Website, Industry, GSTIN). ✓
+    82→   981→   - Enquiries tab: summary line "4 enquiries · 0 converted · ₹2,00,000 total pipeline" at top. Each of 4 enquiry cards shows enquiryNumber, product, status badge, date, budget, AND executive name (RV / Rohit Verma) at the bottom. ✓
+    83→   982→   - Switched to Activity tab (via keyboard: focus tablist → ArrowRight).
+    84→   983→   - Activity form: 5 type pills visible (Note, Call, Email, Meeting, Document) with Note selected by default. ✓
+    85→   984→   - Activity timeline: 2 entries with NOTE badge + RV avatar + Rohit Verma + "4h ago" + content. Vertical line connecting entries. Delete (X) button on each (visible because Super Admin). ✓
+    86→   985→7. **Added a CALL activity**:
+    87→   986→   - Selected "Call" pill (aria-pressed flipped to true, others to false; sky tint applied). ✓
+    88→   987→   - Typed "Test call activity from agent-browser" in input. Clicked Add.
+    89→   988→   - Activity appeared at top of timeline with: CALL badge (sky color), MD avatar (Manoj Dore — current user), "just now" time, content text. ✓
+    90→   989→   - Activity tab count incremented from (2) to (3). ✓
+    91→   990→   - Dev log: `POST /api/activities 201` (201 Created). ✓
+    92→   991→8. **Tested delete activity**:
+    93→   992→   - Clicked X on the test CALL activity → AlertDialog opened ("Delete activity? This action cannot be undone…"). ✓
+    94→   993→   - Clicked Delete (red button) → activity removed from timeline, count back to (2). ✓
+    95→   994→   - Dev log: `DELETE /api/activities/cmqqtfysu001ipf00b4sy49zg 200 in 1112ms`. ✓
+    96→   995→9. **Tested Edit Customer**:
+    97→   996→   - Clicked Edit button → Edit Dialog opened with all fields pre-filled (Company: Tata Steel Ltd, Contact Person: Rajesh Iyer, Mobile: +91 99300 12345, Email: rajesh.iyer@tatasteel.com, City: Jamshedpur, State: Jharkhand, Industry: Steel selected, etc.). ✓
+    98→   997→   - Modified Contact Person to "Rajesh Iyer (Updated)" via React-friendly input event (native setter + dispatchEvent).
+    99→   998→   - Clicked "Save Changes" → toast "Customer updated" appeared, dialog closed, Contact Information display updated to "Rajesh Iyer (Updated)". ✓
+   100→   999→   - Dev log: `PATCH /api/customers/cust-1 200 in 94ms`. Cache invalidated: `GET /api/customers?search=` + `GET /api/customers/cust-1` re-fetched automatically. ✓
+   101→  1000→   - Reverted the change (set back to "Rajesh Iyer", saved) to leave data in original state.
+   102→  1001→10. **Navigated to Quotations view**: PageHeader "Quotations", 4 KPI cards, status Tabs (All/DRAFT/SENT/ACCEPTED/REJECTED/EXPIRED/REVISED), search bar, and **Card view / Table view toggle present**. 23 quotations rendered as cards.
+   103→  1002→11. **Switched Quotations to Table view**: `localStorage["msih-quotations-view"] = "table"`, table rendered with 8 columns (Quotation #, Company, Product, Amount, Status, Valid Until, Created, action). 23 rows. First row: `QT-2025-5023 | Mahindra & Mahindra | ZEISS Axio Vert A1 | ₹1,01,589 | DRAFT | 23 Jul 2026 | 23 Jun 2026 | →`. Amount column right-aligned bold. Status pill colored (DRAFT=slate). ✓
+   104→  1003→12. **Mobile responsive test**: Set viewport to 375x812 (iPhone X). Table view collapsed to stacked rows (`md:hidden`): each row showed quotation number bold + status pill, company name, product, amount bold + valid date. 23 stacked rows. ✓
+   105→  1004→13. **Dark mode test**: Toggled theme to dark. Verified customers table renders correctly in dark mode (slate rows, muted borders, primary accent). Toggled back to light. ✓
+   106→  1005→14. Took 12 screenshots documenting: customers card view, customers table view, customers mobile stacked, customers dark mode, customer 360 sheet (Tata Steel), customer 360 activity tab (with timeline + type pills), customer 360 with CALL activity added, edit customer dialog, customer 360 final (Gamma Tools — single enquiry), quotations card view, quotations table view, quotations mobile stacked.
+   107→  1006→
+   108→  1007→Stage Summary:
+   109→  1008→- Files modified (2): `src/components/app/views/customers-view.tsx` (full rewrite, 730+ lines), `src/components/app/views/quotations-view.tsx` (full rewrite, 470+ lines).
+   110→  1009→- Key features added:
+   111→  1010→  - **Card/Table view toggle** on Customers (localStorage `msih-customers-view`, default card) with same visual pattern as Enquiries (animated left accent stripe, hover lift, icon tile scale).
+   112→  1011→  - **Card/Table view toggle** on Quotations (localStorage `msih-quotations-view`, default card) — toggle placed next to status Tabs.
+   113→  1012→  - Both table views: shadcn Table components, 8 responsive columns, mobile stacked fallback, clickable rows with ArrowRight hover animation, uppercase tracking-wide headers.
+   114→  1013→  - **Customer 360 Header KPI strip** (3 mini-stat cards: Enquiries count, Pipeline value ₹, Last Activity timeAgo).
+   115→  1014→  - **Edit Customer button + Dialog** in Sheet header (ADMIN+ or creator only). Extracted shared `CustomerForm` component handling both create + edit modes. Edit computes field-level diff so PATCH only sends changed fields.
+   116→  1015→  - **Enhanced Activity Timeline** — vertical timeline with colored icon circles per type (NOTE=slate, CALL=sky, EMAIL=violet, MEETING=emerald, DOCUMENT=amber), user avatars, relative time + absolute time on hover, per-entry delete button with AlertDialog confirmation. 403 errors handled gracefully via toast.
+   117→  1016→  - **ActivityForm type pills** (5 colored pill buttons with icons + labels, aria-pressed states, active=tint, inactive=muted).
+   118→  1017→  - **Enquiries tab summary line** ("N enquiries · M converted · ₹X total pipeline") + assigned executive name + initials avatar on each enquiry card.
+   119→  1018→- Visual polish: Tailwind gradient `from-sky-500/15 to-violet-500/15` on icon tiles; `transition-all duration-200` on all hovers; sky/violet/emerald/amber/red/slate palette (NO indigo, NO blue-600); mobile-first responsive (table collapses to stacked rows on `md:hidden`).
+   120→  1019→- Verification:
+   121→  1020→  - `bun run lint` → **exit 0** (0 errors, 0 warnings). One fix: replaced `useMemo` with `useRef` for capturing initial form values to satisfy React Compiler's manual-memoization preservation rule.
+   122→  1021→  - `bunx tsc --noEmit` → **0 errors in touched files**. 6 pre-existing errors in unrelated files only.
+   123→  1022→  - Dev log: all API calls returned 200 (GET/PATCH customers, GET/POST/DELETE activities, GET quotations). No compile errors, no runtime errors.
+   124→  1023→  - agent-browser end-to-end test: full success — Card/Table toggles work and persist on both Customers and Quotations; Customer 360 Sheet shows KPI strip, Edit button, enhanced Activity timeline with colored icons, type pills in activity form; Edit Dialog opens with pre-filled fields and saves changes via PATCH (toast confirmation); Add CALL activity works (sky icon, time, user); Delete activity works (AlertDialog confirmation + DELETE 200); Mobile stacked rows verified; Dark mode verified; 12 screenshots captured.
+   125→  1024→- Risks / follow-ups:
+   126→  1025→  - The `CustomerForm` edit-mode diff logic uses `useRef` to capture initial values once on mount. If the underlying customer data is refreshed while the Edit dialog is open (e.g., via cache invalidation from a parallel mutation), the diff baseline will be stale and the next save might send fields that were "changed" by the refresh. This is a low-probability scenario in practice (the dialog is modal and blocks other interactions), but a future enhancement could re-sync `originalRef` when `initial` changes.
+   127→  1026→  - The activity delete button is shown to all users with `canDelete` evaluated client-side (`role === "ADMIN" || "SUPER_ADMIN" || activity.userId === currentUserId`). The server enforces this independently and returns 403 with a clear message; the toast displays the message verbatim. Future enhancement: hide the button entirely for non-creators/non-admins to avoid tempting clicks that will be rejected.
+   128→  1027→  - The Customer 360 Sheet's "Last Activity" KPI uses `timeAgo` of the most recent activity. If the customer has 0 activities, it shows "—". A future enhancement could fall back to the most recent enquiry date or the customer's `updatedAt`.
+   129→  1028→  - The Customer 360 Sheet's "Pipeline Value" sums `orderValue || budget` across all enquiries. This is a reasonable proxy but `orderValue` is only populated for CONVERTED enquiries; for non-converted enquiries, `budget` is used. A future enhancement could split into "Pipeline (open)" vs "Won (converted)" for clearer sales intelligence.
+   130→  1029→
+   131→  1030→---
+   132→  1031→Task ID: 7-c
+   133→  1032→Agent: Main (Z.ai Code)
+   134→  1033→Task: Styling polish — gradient header banner, refined PageHeader/SectionCard/EmptyState, new Timeline component, dashboard hero banner with live indicator
+   135→  1034→
+   136→  1035→Work Log:
+   137→  1036→- Read worklog.md (Tasks 6-a/6-b/6-c/7-a/7-b summaries) to understand project state and shared component patterns
+   138→  1037→- Enhanced `PageHeader` in `src/components/app/shared.tsx`:
+   139→  1038→  - Added new optional `accent` prop ("primary" | "emerald" | "amber" | "violet" | "rose" | "cyan", default "primary") with accentMap for tile gradient + divider line color
+   140→  1039→  - Icon tile now uses 3-stop gradient (from-X/20 via-X/10 to-X/0) instead of 2-stop for more depth
+   141→  1040→  - Added inner top-half highlight (from-white/15 to-transparent) for premium look
+   142→  1041→  - Icon tile scales on hover (hover:scale-105 transition-transform duration-300)
+   143→  1042→  - Added subtle gradient divider line beneath the header (1px h-px bg-gradient-to-r from-X/40 via-X/10 to-transparent)
+   144→  1043→  - All existing callers (using default accent) automatically get the polished look
+   145→  1044→- Enhanced `EmptyState` in `src/components/app/shared.tsx`:
+   146→  1045→  - Added dotted grid pattern overlay (radial-gradient 1px circles at 16px intervals, opacity 0.4)
+   147→  1046→  - Added secondary smaller glow orb (violet, bottom-right) for depth
+   148→  1047→  - Icon container now has shadow-sm
+   149→  1048→  - All existing callers automatically get the enhanced look
+   150→  1049→- Enhanced `SectionCard` in `src/components/app/shared.tsx`:
+   151→  1050→  - Card now uses `relative overflow-hidden` to enable absolute-positioned decorations
+   152→  1051→  - Added top-edge highlight line (1px h-px from-transparent via-foreground/5 to-transparent)
+   153→  1052→  - Icon now wrapped in a small gradient tile (from-muted-foreground/15 to-muted-foreground/5 with ring-1 ring-muted-foreground/10)
+   154→  1053→  - More refined visual hierarchy
+   155→  1054→- Created new `Timeline` shared component in `src/components/app/shared.tsx`:
+   156→  1055→  - Exports `TimelineTone` union ("sky" | "emerald" | "amber" | "violet" | "rose" | "slate" | "cyan")
+   157→  1056→  - Exports `TimelineItemData` interface (id, icon, tone, title, content, meta, timestamp, fullTimestamp, actions)
+   158→  1057→  - Exports `Timeline` component: vertical timeline with absolute-positioned connector line (gradient from-border/60 to-transparent), colored icon circles per item, group-hover scale-110 on icons, card-style content panel with border + bg-card/40 + group-hover:bg-muted/30, optional timestamp + actions column
+   159→  1058→  - ARIA: role="list" + role="listitem" + aria-label="Activity timeline"
+   160→  1059→  - Empty state: "No activity yet" message
+   161→  1060→- Enhanced Dashboard greeting in `src/components/app/views/dashboard-view.tsx`:
+   162→  1061→  - Replaced flat greeting with gradient banner: `rounded-2xl border border-border/60 bg-gradient-to-br from-sky-500/10 via-card to-violet-500/5 p-5 sm:p-6`
+   163→  1062→  - Added 2 decorative blur orbs (sky top-right, violet bottom-right) — animate-float on one for subtle motion
+   164→  1063→  - Added dotted grid pattern overlay (radial-gradient 1px circles at 18px intervals, opacity 0.35)
+   165→  1064→  - Added "Live Dashboard" pill badge with pulsing dot (animate-ping + animate-pulse combo) in primary tint
+   166→  1065→  - Welcome heading now uses text-3xl on sm+ screens
+   167→  1066→  - Wave emoji 👋 wrapped in `animate-wave origin-[70%_70%]` span for waving animation
+   168→  1067→  - Date wrapped in span with font-medium text-foreground/80 for emphasis
+   169→  1068→  - New Enquiry button gets shadow-sm
+   170→  1069→- Added new CSS animations to `src/app/globals.css`:
+   171→  1070→  - `msih-wave` keyframes: 6-step rotation (0° → 14° → -8° → 14° → -4° → 10° → 0°) for wave emoji, 2.5s ease-in-out infinite with 0.5s delay
+   172→  1071→  - `.animate-wave` utility class
+   173→  1072→  - `msih-float` keyframes: 0% → -8px → 0% vertical float, 6s ease-in-out infinite
+   174→  1073→  - `.animate-float` utility class (ready for use on decorative orbs)
+   175→  1074→  - `msih-shimmer` keyframes: shimmer effect for premium loading states
+   176→  1075→  - `.shimmer` utility class (premium skeleton alternative, ready for future use)
+   177→  1076→
+   178→  1077→Stage Summary:
+   179→  1078→- Files modified (3):
+   180→  1079→  - src/components/app/shared.tsx (PageHeader: +accent prop +gradient divider +icon tile depth; EmptyState: +dotted grid +secondary orb +shadow-sm; SectionCard: +top-edge highlight +icon tile; NEW Timeline component with TimelineTone + TimelineItemData types)
+   181→  1080→  - src/components/app/views/dashboard-view.tsx (greeting → gradient banner with Live Dashboard pill + animated wave + dotted grid + 2 decorative orbs)
+   182→  1081→  - src/app/globals.css (+msih-wave / +msih-float / +msih-shimmer keyframes + .animate-wave / .animate-float / .shimmer utility classes)
+   183→  1082→- New shared exports: Timeline, TimelineTone, TimelineItemData
+   184→  1083→- Enhanced existing exports (backward-compatible — all existing callers get the polish automatically): PageHeader (new optional accent prop), EmptyState, SectionCard
+   185→  1084→- Visual additions:
+   186→  1085→  - PageHeader: 3-stop gradient icon tile with inner highlight + hover scale + subtle gradient divider line beneath
+   187→  1086→  - EmptyState: dotted grid pattern + secondary violet glow orb + shadow-sm on icon container
+   188→  1087→  - SectionCard: top-edge highlight line + icon now in a small gradient tile
+   189→  1088→  - Dashboard greeting: gradient banner with Live Dashboard pulsing pill + animated wave emoji + dotted grid + 2 decorative orbs + larger 3xl heading
+   190→  1089→  - New reusable Timeline component for activity feeds (7 color tones, ARIA list roles, hover effects)
+   191→  1090→  - 3 new CSS keyframe animations (wave, float, shimmer)
+   192→  1091→- Color discipline: Only sky (primary), violet (secondary), emerald (success), amber (warning), rose (danger), cyan, slate. NO indigo, NO blue-600.
+   193→  1092→- Verification:
+   194→  1093→  - `bun run lint` → exit 0 (clean)
+   195→  1094→  - dev.log → all GET/PATCH/POST/DELETE routes return 200, no errors/warnings/failures
+   196→  1095→  - agent-browser E2E: Dashboard renders gradient banner with "LIVE DASHBOARD" pill + animated wave + "Welcome back, Manoj 👋" heading. Customers view Card/Table toggle renders correctly. Customer 360 sheet opens with Edit button + Activity tab + 5 type pills (Note/Call/Email/Meeting/Document). Import/Export view shows "Open Wizard" button → opens 3-step wizard with Upload/Map/Review steps + Enquiries/Customers entity selector.
+   197→  1096→  - Screenshots: /tmp/dashboard-styled.png, /tmp/customer-360-styled.png, /tmp/customer-360-activity.png, /tmp/import-wizard.png
+   198→  1097→- Backward compatibility: All existing PageHeader / EmptyState / SectionCard usages continue to work unchanged; new accent prop is optional with safe default.
+   199→  1098→- Timeline component ready for reuse: Can be imported and used by future views (e.g., audit log timeline, follow-up history, enquiry activity feed) — provides consistent visual language across all activity displays.
+   200→  1099→
+   201→  1100→Final Cycle #7 Summary (Tasks 7-a, 7-b, 7-c):
+   202→  1101→- 3 parallel work streams completed:
+   203→  1102→  - Task 7-a (subagent): CSV Import Wizard — 3-step dialog (Upload/Map/Review) with smart header auto-matching, Entity selector (Enquiries/Customers), new /api/import-entities endpoint with transaction-based bulk create + per-row error handling + auto customer find-or-create + audit log. End-to-end tested: imported 3 enquiries, all visible in Enquiries view (40 → 43).
+   204→  1103→  - Task 7-b (subagent): Card/Table view toggle on Customers + Quotations (persisted to localStorage, mobile-stacked rows, 8 columns each). Customer 360 enhancements: KPI strip (enquiries/pipeline/last activity), Edit customer dialog (shared CustomerForm for create+edit), enhanced Activity Timeline with type-colored icons + user avatars + delete with AlertDialog + type pill selector with icons.
+   205→  1104→  - Task 7-c (main): Styling polish across shared components — PageHeader with accent variants + gradient divider + icon tile depth, EmptyState with dotted grid + secondary orb, SectionCard with top-edge highlight + icon tile, NEW reusable Timeline component (7 color tones, ARIA list roles), Dashboard gradient banner with Live Dashboard pulsing pill + animated wave emoji + decorative orbs + dotted grid. Added 3 new CSS keyframe animations (wave, float, shimmer).
+   206→  1105→- Files modified (5) + created (1):
+   207→  1106→  - CREATED: src/app/api/import-entities/route.ts
+   208→  1107→  - MODIFIED: src/components/app/views/import-export-view.tsx (3-step wizard replaces simple upload box)
+   209→  1108→  - MODIFIED: src/components/app/views/customers-view.tsx (Card/Table toggle + 360 KPI strip + Edit dialog + enhanced Activity timeline)
+   210→  1109→  - MODIFIED: src/components/app/views/quotations-view.tsx (Card/Table toggle)
+   211→  1110→  - MODIFIED: src/components/app/shared.tsx (PageHeader/EmptyState/SectionCard enhancements + new Timeline component)
+   212→  1111→  - MODIFIED: src/components/app/views/dashboard-view.tsx (gradient banner greeting)
+   213→  1112→  - MODIFIED: src/app/globals.css (3 new keyframe animations)
+   214→  1113→- Major additions this cycle:
+   215→  1114→  - CSV Import Wizard with column-mapping preview + real bulk-create endpoint
+   216→  1115→  - Card/Table view toggle on Customers + Quotations (now on 3 views total — Enquiries, Customers, Quotations)
+   217→  1116→  - Customer 360 enhancements: KPI strip, Edit dialog, enhanced Activity Timeline with colored icons + delete
+   218→  1117→  - Reusable Timeline component (7 color tones, ARIA list roles, hover effects)
+   219→  1118→  - Dashboard gradient banner with Live Dashboard pulsing pill + animated wave emoji
+   220→  1119→  - Polished PageHeader (accent variants + gradient divider + icon tile depth)
+   221→  1120→  - Polished EmptyState (dotted grid + secondary orb)
+   222→  1121→  - Polished SectionCard (top-edge highlight + icon tile)
+   223→  1122→  - 3 new CSS animations (wave, float, shimmer)
+   224→  1123→- Industrial Blue (sky) + Charcoal theme preserved; no indigo, no blue-600
+   225→  1124→- Lint clean (exit 0); no runtime errors in dev.log; all API routes 200
+   226→  1125→- 15-min cron job 227557 continues autonomous QA + feature development
+   227→  1126→
+   228→  1127→Current Project Status:
+   229→  1128→- MSIH CRM V1.0: 23 views, 23+ API routes (added /api/import-entities), 14 Prisma models
+   230→  1129→- 3 views now support Card/Table view toggle (Enquiries, Customers, Quotations) — consistent UX pattern
+   231→  1130→- Customer 360 is now a complete CRM hub: contact info + KPI strip + enquiries + enhanced activity timeline + edit + add/delete activities
+   232→  1131→- Import/Export is now production-grade: 3-step wizard with column mapping + bulk insert with per-row error reporting
+   233→  1132→- Reusable Timeline component available for all activity displays
+   234→  1133→- Dashboard hero banner with animated live indicator + waving emoji
+   235→  1134→- All shared UI components (PageHeader, EmptyState, SectionCard) polished with depth + accents
+   236→  1135→
+   237→  1136→Unresolved / Next-phase recommendations:
+   238→  1137→- Saved Views UI on Tasks and Quotations (currently only on Enquiries)
+   239→  1138→- "Select all matching" across pages for bulk actions
+   240→  1139→- Bulk reassign (change assignedTo) in addition to bulk status
+   241→  1140→- Onboarding tour / first-time-user walkthrough
+   242→  1141→- CSV Import: add "skip duplicates" toggle (currently insert-only creates duplicates on re-import)
+   243→  1142→- CSV Import: progress bar for very large imports (>500 rows could approach 30s transaction timeout)
+   244→  1143→- Mobile swipe-to-navigate between views
+   245→  1144→- Full screen-reader testing pass with NVDA/VoiceOver
+   246→  1145→- PDF export (currently only CSV/JSON; PDF/PPT cards show "available in next update")
+   247→  1146→- Use new Timeline component on Audit Logs view for visual history
+   248→  1147→- Use new Timeline component on Enquiry detail sheet for follow-up history
+   249→  1148→- Add accent variants to more views (e.g., violet for AI Assistant, emerald for Forecasting, amber for Calendar)
+   250→  1149→
